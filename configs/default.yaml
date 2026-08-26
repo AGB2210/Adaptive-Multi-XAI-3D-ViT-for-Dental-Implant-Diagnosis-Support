@@ -44,6 +44,34 @@ task:
   # the physical size of a real 4x10 mm fixture.
   min_voxels: 50
 
+# ---------------------------------------------------------------------------
+# Implant-site rules. CLINICAL THRESHOLDS -- these decide every label the model
+# is trained on, so they live here in the open rather than inside the code, and
+# scripts/build_implant_labels.py refuses to run if any is missing.
+#
+# Every site's measured millimetres are stored in the CSV alongside the verdict,
+# so changing a number here and re-scoring takes seconds. Nothing needs
+# reprocessing.
+#
+# Sources, to be confirmed by the project guide before publication:
+#   mandible  10 mm implant + 2 mm safety zone above the inferior alveolar
+#             canal. The 2 mm zone is the consensus figure (Greenstein & Tarnow,
+#             J Periodontol 2006); Renton (2010) argues it can be inadequate
+#             because the drill runs ~1.5 mm past the implant, so treat 12 mm as
+#             a floor rather than a comfortable margin.
+#   maxilla   10 mm residual bone below the sinus floor is class A of the 1996
+#             Sinus Consensus Conference: standard placement, no augmentation.
+#   width     6 mm bucco-lingual for a conventional 3.75-4 mm implant, leaving
+#             >=1 mm of bone on the buccal and lingual plates.
+sites:
+  min_height_mandible_mm: 12.0
+  min_height_maxilla_mm: 10.0
+  min_width_mm: 6.0
+  # Third molars (18, 28, 38, 48) are excluded from scoring entirely: routinely
+  # absent, essentially never implanted, and counting them as "needs an implant"
+  # would fill the positive class with clinically meaningless sites.
+  exclude_third_molars: true
+
 preprocess:
   target_spacing: 1.0                 # mm, isotropic
   out_shape: [128, 128, 128]

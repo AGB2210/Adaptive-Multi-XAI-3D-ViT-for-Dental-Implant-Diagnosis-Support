@@ -1,0 +1,170 @@
+"""Training samples that are tooth SITES, not whole scans.
+
+One 532-scan dataset becomes ~14,900 site samples, and each sample is a small
+box cut from the scan at its native 0.3 mm. That is the whole reason for this
+module, and it is worth being explicit about why it beats the obvious
+alternative of feeding the model a whole downsampled head:
+
+    128^3 at 1.0 mm      whole head, 3.3x blurred     532 samples
+    256^3 at 0.5 mm      whole head, 1.7x blurred     532 samples
+    96^3  at 0.3 mm      one site, NOT blurred      ~14,900 samples
+
+The patch is both sharper and 19x smaller than the 256^3 volume. It matters
+because the structure the model has to respect is the inferior alveolar canal,
+which is 2-3 mm across: at 1.0 mm that is two or three voxels, and no
+explanation method can point at something it cannot resolve.
+
+SITE POSITIONS COME FROM THE MASKS. scripts/build_implant_labels.py fits the
+dental arch to the teeth a scan still has and writes each site's voxel
+coordinates into the CSV. That is legitimate for training and for measuring
+this model, and it is NOT a deployable pipeline: a new patient arrives with an
+image and no segmentation, so a fielded system needs a site-detection step that
+does not exist here. Say so in the report rather than implying otherwise.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+SITE_TARGETS = ("needs_implant", "feasible")
+
+
+def load_sites(
+    sites_csv: str | Path,
+    targets=SITE_TARGETS,
+    methods=("teeth",),
+    drop_unmeasurable: bool = True,
+) -> pd.DataFrame:
+    """Read sites_*.csv and keep the rows that can honestly be trained on.
+
+    `methods` filters on how each site position was found. The default keeps
+    only positions fitted to three or more real teeth; passing
+    ("teeth", "sparse", "opposite_jaw") includes the weaker tiers, which is how
+    the edentulous patients get represented. That is a real trade-off between
+    coverage and position accuracy, so it is a parameter rather than a decision
+    buried in here.
+    """
+    df = pd.read_csv(sites_csv, dtype={"patient_id": str})
+    for column in ("patient_id", "tooth", "site_x", "site_y", *targets):
+        if column not in df.columns:
+            raise ValueError(f"{sites_csv} has no {column!r} column -- rebuild it "
+                             "with scripts/build_implant_labels.py")
+
+    if methods is not None:
+        df = df[df.site_method.isin(methods)]
+    df = df[df.site_x.notna() & df.site_y.notna()]
+    if drop_unmeasurable:
+        # A site we could not measure is missing data, not a negative finding.
+        # Training on it as "not feasible" would teach the model to reproduce
+        # our own measurement failures.
+        df = df[df[list(targets)].notna().all(axis=1)]
+    return df.reset_index(drop=True)
+
+
+def target_matrix(df: pd.DataFrame, targets=SITE_TARGETS) -> np.ndarray:
+    return df[list(targets)].to_numpy(dtype=np.float32)
+
+
+def cut_patch(volume: np.ndarray, centre, size: int, pad_value: float = 0.0) -> np.ndarray:
+    """A `size`^3 box centred on `centre`, zero-padded where it leaves the scan.
+
+    Padding rather than shifting the box: a site near the edge of the field of
+    view genuinely has less context, and sliding the window would silently
+    centre it on different anatomy than the label describes.
+    """
+    out = np.full((size, size, size), pad_value, dtype=volume.dtype)
+    half = size // 2
+    src, dst = [], []
+    for axis in range(3):
+        c = int(round(float(centre[axis])))
+        lo, hi = c - half, c - half + size
+        s0, s1 = max(0, lo), min(volume.shape[axis], hi)
+        if s0 >= s1:
+            return out                      # box lies entirely outside the scan
+        src.append(slice(s0, s1))
+        dst.append(slice(s0 - lo, s1 - lo))
+    out[dst[0], dst[1], dst[2]] = volume[src[0], src[1], src[2]]
+    return out
+
+
+class SitePatchDataset(Dataset):
+    """One sample per tooth site: a native-resolution box and its labels.
+
+    Volumes are memory-mapped, so a 50 GB native-resolution cache costs no RAM
+    and a patch read touches only the pages it needs. Do not switch this to
+    np.load without mmap_mode unless the cache genuinely fits in memory.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str | Path,
+        sites: pd.DataFrame,
+        targets=SITE_TARGETS,
+        patch_size: int = 96,
+        augment=None,
+        seed: int = 0,
+    ):
+        self.cache_dir = Path(cache_dir)
+        self.sites = sites.reset_index(drop=True)
+        self.targets = list(targets)
+        self.patch_size = int(patch_size)
+        self.augment = augment
+        self.seed = int(seed)
+        self.labels = target_matrix(self.sites, self.targets)
+
+        wanted = sorted(set(self.sites.patient_id))
+        missing = [p for p in wanted if not (self.cache_dir / f"{p}.npy").exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"{len(missing)} of {len(wanted)} cached volumes missing under "
+                f"{self.cache_dir} (first few: {missing[:5]}). Run scripts/build_cache.py."
+            )
+        self._open: dict[str, np.ndarray] = {}
+
+    def __len__(self) -> int:
+        return len(self.sites)
+
+    def volume(self, patient_id: str) -> np.ndarray:
+        cached = self._open.get(patient_id)
+        if cached is None:
+            cached = np.load(self.cache_dir / f"{patient_id}.npy", mmap_mode="r")
+            self._open[patient_id] = cached
+        return cached
+
+    def __getitem__(self, idx: int):
+        row = self.sites.iloc[idx]
+        volume = self.volume(row.patient_id)
+
+        # z comes from the crest so the box straddles the ridge rather than
+        # sitting wherever the arch fit happened to put it.
+        z = row.get("site_z", np.nan)
+        if not np.isfinite(z):
+            z = volume.shape[2] / 2.0
+        patch = cut_patch(volume, (row.site_x, row.site_y, z), self.patch_size)
+        patch = np.asarray(patch, dtype=np.float32)
+
+        if self.augment is not None:
+            rng = np.random.default_rng(
+                (self.seed, idx, int(torch.randint(0, 2**31, (1,)).item()))
+            )
+            patch = self.augment(patch, rng)
+
+        x = torch.from_numpy(np.ascontiguousarray(patch)).unsqueeze(0)
+        y = torch.from_numpy(self.labels[idx])
+        return x, y
+
+
+def group_ids(sites: pd.DataFrame) -> np.ndarray:
+    """Patient id per row, for splitting.
+
+    THE SPLIT MUST BE BY PATIENT, NOT BY SITE. Twenty-eight sites from one scan
+    share the same anatomy, the same field of view and the same annotator. Split
+    them at random and the model sees a patient's left molars in training and
+    their right molars in test, which reads as generalisation and is not.
+    """
+    return sites.patient_id.to_numpy()

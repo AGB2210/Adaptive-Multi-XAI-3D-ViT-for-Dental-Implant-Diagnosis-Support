@@ -1,0 +1,81 @@
+extends: default.yaml
+
+# ===========================================================================
+# Per-site implant need and feasibility, at native resolution.
+#
+# This config is written for a rented datacentre GPU and deliberately carries
+# NONE of the compromises that a 4 GB laptop forced on configs/default.yaml.
+# Every value below is set by what the task needs, not by what fitted locally.
+# If you run it on a small card it will run out of memory -- lower batch_size
+# and raise accum_steps to compensate, and change nothing else.
+# ===========================================================================
+
+data:
+  cache_dir: artifacts_sites/cache
+  artifacts_dir: artifacts_sites
+
+task:
+  # Two independent questions per site, so binary cross-entropy over two
+  # outputs rather than a 3-way softmax: a site can need an implant and be
+  # infeasible, and collapsing that into one class throws the pairing away.
+  labels: [needs_implant, feasible]
+  sites_csv: sites_toothfairy3.csv
+  # Which site-localisation tiers to train on. "teeth" alone is the accurate
+  # subset (leave-one-out median error 1.9 mm); adding the weaker tiers brings
+  # in the edentulous patients, who are 30.7% of missing sites and the ones who
+  # most need implants. Start strict, then measure what the weaker tiers cost.
+  site_methods: [teeth]
+
+preprocess:
+  # NATIVE RESOLUTION. ToothFairy3 ships at 0.3 mm isotropic and nothing here
+  # resamples it. The inferior alveolar canal is 2-3 mm across: at the 1.0 mm
+  # used previously that is two or three voxels, and no attribution method can
+  # point at a structure it cannot resolve.
+  target_spacing: null
+  # Cache whole scans cropped to the jaw; patches are cut in the data loader.
+  # Storing 28 patches per scan instead would triple the disk for no new data.
+  cache_mode: native_volume
+  out_shape: null
+  fit_mode: none
+
+model:
+  # 96 voxels at 0.3 mm = 28.8 mm, more than a tooth site needs, and SMALLER
+  # than the 128^3 volumes trained before.
+  img_size: 96
+  # patch 8 at 0.3 mm = 2.4 mm per token, so Grad-CAM and attention rollout can
+  # resolve the nerve canal. At the previous 16-voxel patch on 1 mm data one
+  # token covered 16 mm and the canal was a third of a token; every localisation
+  # number would have been upsampling rather than evidence.
+  patch_size: 8
+  num_classes: 2
+
+train:
+  # Sized for a 24 GB card. 96^3 patches are 1/19th the voxels of 256^3, so this
+  # fits comfortably; it is the batch the task wants, not the batch that fit on
+  # a laptop.
+  batch_size: 64
+  accum_steps: 1
+  # Linear scaling from the measured-good 3.0e-5 at effective batch 4.
+  lr: 4.8e-4
+  epochs: 60
+  # ~14,900 site samples against 532 whole scans previously: 28x the data, so
+  # fewer epochs cover far more gradient steps.
+  early_stop_patience: 12
+
+  # Splits are BY PATIENT. Twenty-eight sites from one scan share anatomy, field
+  # of view and annotator; splitting sites at random puts a patient's left
+  # molars in train and their right molars in test, which reads as
+  # generalisation and is not.
+  group_by: patient_id
+
+xai:
+  # Sample sizes set by what makes a claim, not by what finished overnight on a
+  # laptop. The previous run had to cut every one of these.
+  faithfulness_cases: 200
+  localization_cases: 200
+  adaptive_cases: 200
+  randomization_cases: 30
+  # GradientSHAP at 24 samples measured a relative standard error of 0.5689 --
+  # the estimate had not converged and its numbers were not quotable.
+  shap_samples: 200
+  ig_steps: 256

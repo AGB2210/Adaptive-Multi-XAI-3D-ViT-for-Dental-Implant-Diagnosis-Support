@@ -1,0 +1,159 @@
+"""Site-level samples: patch cutting, filtering, and the split that must not leak."""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.data.site_dataset import (
+    SitePatchDataset,
+    cut_patch,
+    group_ids,
+    load_sites,
+    target_matrix,
+)
+
+
+def sites_frame(rows):
+    return pd.DataFrame(rows)
+
+
+BASE = dict(site_method="teeth", site_x=20.0, site_y=20.0, site_z=20.0,
+            needs_implant=1.0, feasible=1.0)
+
+
+@pytest.fixture
+def csv(tmp_path):
+    df = sites_frame([
+        {**BASE, "patient_id": "A", "tooth": 36},
+        {**BASE, "patient_id": "A", "tooth": 37, "feasible": 0.0},
+        {**BASE, "patient_id": "B", "tooth": 36, "site_method": "sparse"},
+        {**BASE, "patient_id": "B", "tooth": 37, "site_method": "opposite_jaw"},
+        {**BASE, "patient_id": "C", "tooth": 36, "feasible": np.nan},
+        {**BASE, "patient_id": "C", "tooth": 37, "site_x": np.nan},
+    ])
+    path = tmp_path / "sites.csv"
+    df.to_csv(path, index=False)
+    return path
+
+
+class TestCutPatch:
+    def test_returns_the_requested_size(self):
+        v = np.arange(60 ** 3, dtype=np.float32).reshape(60, 60, 60)
+        assert cut_patch(v, (30, 30, 30), 16).shape == (16, 16, 16)
+
+    def test_is_centred_on_the_point(self):
+        v = np.zeros((60, 60, 60), dtype=np.float32)
+        v[30, 30, 30] = 9.0
+        assert cut_patch(v, (30, 30, 30), 16)[8, 8, 8] == 9.0
+
+    def test_pads_at_the_edge_rather_than_sliding(self):
+        """A site near the edge of the field of view genuinely has less context.
+        Shifting the window would centre it on different anatomy than the label
+        describes, and nothing downstream would notice."""
+        v = np.ones((60, 60, 60), dtype=np.float32)
+        patch = cut_patch(v, (1, 30, 30), 16)
+        assert patch.shape == (16, 16, 16)
+        assert patch[0, 8, 8] == 0.0     # padded
+        assert patch[8, 8, 8] == 1.0     # real voxel still at the centre
+
+    def test_a_box_entirely_outside_is_all_padding(self):
+        v = np.ones((60, 60, 60), dtype=np.float32)
+        assert cut_patch(v, (-100, 30, 30), 16).sum() == 0.0
+
+    def test_does_not_modify_the_source_volume(self):
+        v = np.ones((40, 40, 40), dtype=np.float32)
+        cut_patch(v, (20, 20, 20), 8)[:] = 5.0
+        assert v.max() == 1.0
+
+
+class TestLoadSites:
+    def test_default_keeps_teeth_only(self, csv):
+        df = load_sites(csv)
+        assert set(df.site_method) == {"teeth"}
+        assert len(df) == 2
+
+    def test_weaker_tiers_can_be_opted_into(self, csv):
+        """The edentulous patients are 30.7% of missing sites and only reachable
+        through the weaker tiers, so including them must be possible."""
+        df = load_sites(csv, methods=("teeth", "sparse", "opposite_jaw"))
+        assert set(df.site_method) == {"teeth", "sparse", "opposite_jaw"}
+
+    def test_rows_without_a_position_are_dropped(self, csv):
+        df = load_sites(csv, methods=None)
+        assert df.site_x.notna().all()
+
+    def test_unmeasurable_rows_are_dropped_not_treated_as_negative(self, csv):
+        """Training a nan as 'not feasible' would teach the model to reproduce
+        our own measurement failures as clinical findings."""
+        df = load_sites(csv, methods=None)
+        assert "C" not in set(df.patient_id) or df[df.patient_id == "C"].feasible.notna().all()
+
+    def test_a_missing_column_is_named(self, tmp_path):
+        path = tmp_path / "bad.csv"
+        pd.DataFrame([{"patient_id": "A", "tooth": 36}]).to_csv(path, index=False)
+        with pytest.raises(ValueError, match="site_x"):
+            load_sites(path)
+
+
+class TestTargets:
+    def test_matrix_follows_the_requested_order(self):
+        df = sites_frame([{**BASE, "patient_id": "A", "tooth": 36, "feasible": 0.0}])
+        assert target_matrix(df, ("needs_implant", "feasible")).tolist() == [[1.0, 0.0]]
+        assert target_matrix(df, ("feasible", "needs_implant")).tolist() == [[0.0, 1.0]]
+
+
+class TestGrouping:
+    def test_group_is_the_patient_not_the_site(self):
+        """28 sites from one scan share anatomy, field of view and annotator.
+        Splitting by site puts a patient's left molars in train and their right
+        molars in test, which reads as generalisation and is not."""
+        df = sites_frame([
+            {**BASE, "patient_id": "A", "tooth": 36},
+            {**BASE, "patient_id": "A", "tooth": 37},
+            {**BASE, "patient_id": "B", "tooth": 36},
+        ])
+        assert group_ids(df).tolist() == ["A", "A", "B"]
+        assert len(set(group_ids(df))) == 2
+
+
+class TestSitePatchDataset:
+    def build(self, tmp_path, n_patients=2):
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        rows = []
+        for p in [chr(ord("A") + i) for i in range(n_patients)]:
+            np.save(cache / f"{p}.npy", np.full((60, 60, 60), ord(p), dtype=np.float32))
+            rows.append({**BASE, "patient_id": p, "tooth": 36, "site_x": 30.0,
+                         "site_y": 30.0, "site_z": 30.0})
+        return cache, sites_frame(rows)
+
+    def test_yields_a_patch_and_two_targets(self, tmp_path):
+        cache, sites = self.build(tmp_path)
+        ds = SitePatchDataset(cache, sites, patch_size=16)
+        x, y = ds[0]
+        assert tuple(x.shape) == (1, 16, 16, 16)
+        assert tuple(y.shape) == (2,)
+
+    def test_one_sample_per_site_not_per_scan(self, tmp_path):
+        cache, sites = self.build(tmp_path, n_patients=3)
+        assert len(SitePatchDataset(cache, sites, patch_size=16)) == 3
+
+    def test_each_sample_reads_its_own_patient(self, tmp_path):
+        cache, sites = self.build(tmp_path, n_patients=2)
+        ds = SitePatchDataset(cache, sites, patch_size=8)
+        assert ds[0][0].mean().item() == float(ord("A"))
+        assert ds[1][0].mean().item() == float(ord("B"))
+
+    def test_a_missing_cached_volume_is_named(self, tmp_path):
+        cache, sites = self.build(tmp_path)
+        sites.loc[0, "patient_id"] = "ZZZ"
+        with pytest.raises(FileNotFoundError, match="ZZZ"):
+            SitePatchDataset(cache, sites, patch_size=16)
+
+    def test_volumes_are_memory_mapped(self, tmp_path):
+        """A 50 GB native-resolution cache must not be pulled into RAM."""
+        cache, sites = self.build(tmp_path)
+        ds = SitePatchDataset(cache, sites, patch_size=16)
+        assert isinstance(ds.volume("A"), np.memmap)
