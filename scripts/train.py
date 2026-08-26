@@ -52,7 +52,8 @@ from src.data.splits import (  # noqa: E402
     split_prevalence,
 )
 from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
-from src.models import build_model  # noqa: E402
+from src.models import build_model
+from src.xai.runner import model_img_size  # noqa: E402
 from src.models.prevalence import PrevalenceBaseline  # noqa: E402
 from src.train.loop import Trainer, predict  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
@@ -310,10 +311,7 @@ def main() -> None:
     # The site task sets model.img_size directly and leaves preprocess.out_shape
     # null, because nothing is resampled onto a fixed grid -- patches are cut at
     # the scan's own resolution.
-    img_size = getattr(cfg.model, "img_size", None)
-    if img_size is None:
-        img_size = cfg.preprocess.out_shape[0]
-    model = build_model(cfg.model, img_size=int(img_size))
+    model = build_model(cfg.model, img_size=model_img_size(cfg))
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info("%s: %.1fM trainable parameters", cfg.model.name, n_params / 1e6)
 

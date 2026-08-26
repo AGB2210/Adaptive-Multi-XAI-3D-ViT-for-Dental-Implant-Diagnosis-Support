@@ -64,7 +64,7 @@ def main() -> None:
     labels = list(ckpt.get("label_names") or label_names_for(cfg))
     cfg.model.num_classes = len(labels)
 
-    model = build_model(cfg.model, img_size=cfg.preprocess.out_shape[0])
+    model = build_model(cfg.model, img_size=model_img_size(cfg))
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
     log.info("loaded %s (epoch %s), %d labels: %s",

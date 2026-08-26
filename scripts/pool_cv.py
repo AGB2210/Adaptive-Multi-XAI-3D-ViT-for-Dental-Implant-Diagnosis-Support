@@ -113,7 +113,7 @@ def main() -> None:
             pin_memory=device.type == "cuda",
         )
 
-        model = build_model(cfg.model, img_size=cfg.preprocess.out_shape[0])
+        model = build_model(cfg.model, img_size=model_img_size(cfg))
         ckpt = load_checkpoint_file(ckpt_path, device)
         if ckpt.get("label_names") and list(ckpt["label_names"]) != list(labels):
             raise SystemExit(

@@ -85,8 +85,29 @@ def require_prerequisites(cfg, checkpoint: str | Path | None = None, need_extern
         raise FileNotFoundError("prerequisites not met:\n  - " + "\n  - ".join(problems))
 
 
+def model_img_size(cfg) -> int:
+    """Input edge length, from the model config first.
+
+    The site task sets model.img_size and leaves preprocess.out_shape null,
+    because nothing is resampled onto a fixed grid -- patches are cut at the
+    scan's own resolution. Reading out_shape[0] unconditionally raises a
+    TypeError on None, which is a confusing way to be told the config is for a
+    different pipeline.
+    """
+    size = getattr(cfg.model, "img_size", None)
+    if size is not None:
+        return int(size)
+    shape = getattr(cfg.preprocess, "out_shape", None)
+    if not shape:
+        raise SystemExit(
+            "cannot determine the model input size: set model.img_size, or "
+            "preprocess.out_shape for the fixed-grid pipeline."
+        )
+    return int(shape[0])
+
+
 def load_model(cfg, checkpoint: str | Path, device: torch.device):
-    model = build_model(cfg.model, img_size=cfg.preprocess.out_shape[0])
+    model = build_model(cfg.model, img_size=model_img_size(cfg))
     ckpt = load_checkpoint_file(checkpoint, device)
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
