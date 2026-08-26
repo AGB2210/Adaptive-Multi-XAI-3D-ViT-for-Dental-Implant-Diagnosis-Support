@@ -253,7 +253,14 @@ def main() -> None:
     if device.type == "cpu":
         log.warning("no CUDA device: a 12-layer 3D ViT on CPU is impractical for a full run")
 
+    # A cross-validation round MUST get its own directory. Without the fold in
+    # the name every round writes over the last one, a five-fold run leaves a
+    # single checkpoint, and scripts/pool_cv.py -- which looks for cv_fold{k} --
+    # either fails or, worse, pools one model against itself. This used to
+    # depend on remembering --out.
     run_name = cfg.model.name + ("_synthetic" if args.synthetic else "")
+    if args.fold is not None and not args.synthetic:
+        run_name = f"cv_fold{args.fold}"
     out_dir = Path(args.out or Path(cfg.train.out_dir) / run_name)
 
     # ---- data ----------------------------------------------------------

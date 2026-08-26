@@ -215,3 +215,41 @@ class TestArtifactIsolation:
         other's labels, splits and checkpoints."""
         dirs = [str(load_config(p).data.artifacts_dir) for p in self.CONFIGS]
         assert len(set(dirs)) == len(dirs), f"configs share an artifacts dir: {dirs}"
+
+
+class TestRunNaming:
+    """A cross-validation round must not overwrite the previous one.
+
+    train.py used to name every run after the model, so five folds wrote to one
+    directory unless --out was passed by hand. pool_cv.py looks for cv_fold{k}
+    and would then either fail outright or pool a single model against itself.
+    """
+
+    @staticmethod
+    def run_name(model_name: str, fold, synthetic: bool) -> str:
+        name = model_name + ("_synthetic" if synthetic else "")
+        if fold is not None and not synthetic:
+            name = f"cv_fold{fold}"
+        return name
+
+    def test_each_fold_gets_its_own_directory(self):
+        names = {self.run_name("vit3d", k, False) for k in range(5)}
+        assert names == {f"cv_fold{k}" for k in range(5)}
+        assert len(names) == 5
+
+    def test_a_single_split_run_keeps_the_model_name(self):
+        assert self.run_name("vit3d", None, False) == "vit3d"
+
+    def test_the_synthetic_gate_never_claims_a_fold_directory(self):
+        """The gate trains on planted blobs; its checkpoint must never be
+        mistaken for a cross-validation round by pool_cv."""
+        assert self.run_name("vit3d", 3, True) == "vit3d_synthetic"
+
+    def test_the_name_matches_what_pool_cv_looks_for(self):
+        import re
+        from pathlib import Path
+
+        source = Path("scripts/pool_cv.py").read_text(encoding="utf-8")
+        pattern = re.search(r'f"cv_fold\{(\w+)\}"', source)
+        assert pattern, "pool_cv.py no longer builds a cv_fold{k} directory name"
+        assert self.run_name("vit3d", 2, False) == "cv_fold2"

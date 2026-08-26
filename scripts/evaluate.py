@@ -23,7 +23,6 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.dataset import CachedVolumeDataset, load_label_matrix, restrict_to_cache  # noqa: E402
-from src.data.splits import load_splits  # noqa: E402
 from src.data.taskdef import external_dataset, label_names_for, primary_dataset  # noqa: E402
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file, predict  # noqa: E402
@@ -31,7 +30,11 @@ from src.train.metrics import evaluate, format_metrics  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
-from src.xai.runner import model_img_size  # noqa: E402
+from src.xai.runner import (  # noqa: E402
+    load_case_set,
+    model_img_size,
+    predict_case_logits,
+)
 
 log = get_logger("evaluate")
 
@@ -50,6 +53,8 @@ def main() -> None:
                     help="also evaluate zero-shot on the external cohort")
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--num-workers", dest="num_workers", type=int, default=0)
+    ap.add_argument("--fold", type=int, default=None,
+                    help="cross-validation round; omit for a single train/val/test split")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -76,17 +81,17 @@ def main() -> None:
 
     # ---- internal: the primary cohort -----------------------------------
     primary = primary_dataset(cfg)
-    cache = Path(cfg.data.cache_dir) / primary
-    ids_all, y_all = load_label_matrix(art / f"labels_{primary}.csv", labels)
-    ids_all, y_all = restrict_to_cache(ids_all, y_all, cache)
-    index = {p: i for i, p in enumerate(ids_all)}
 
-    splits = load_splits(art / "splits.json")
-    ids = [p for p in splits[args.split] if p in index]
-    y = y_all[[index[p] for p in ids]]
+    # load_case_set covers both tasks: a case is a whole scan, or a tooth site
+    # whose input is a patch cut from one. It also applies the split, which for
+    # the site task is by patient.
+    cases = load_case_set(cfg, args.split, primary, fold=args.fold)
+    ids, targets = cases.ids, cases.y
+    if not ids:
+        raise SystemExit(f"no cases in the {args.split!r} split -- run scripts/train.py first")
 
-    loader = build_loader(cache, ids, y, cfg.train.batch_size, args.num_workers)
-    probs, targets = predict(model, loader, device)
+    logits = predict_case_logits(model, cases, device, batch_size=cfg.train.batch_size)
+    probs = 1.0 / (1.0 + np.exp(-logits))
 
     # Thresholds come from validation, never from the split being reported.
     val_metrics_path = Path(args.checkpoint).parent / "best_val_metrics.json"

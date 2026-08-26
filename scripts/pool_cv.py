@@ -28,24 +28,23 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.data.dataset import (  # noqa: E402
-    CachedVolumeDataset,
-    load_label_matrix,
-    restrict_to_cache,
-)
-from src.data.splits import check_folds_disjoint, fold_assignment, load_folds  # noqa: E402
+from src.data.splits import check_folds_disjoint, load_folds  # noqa: E402
 from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
 from src.models import build_model  # noqa: E402
-from src.train.loop import load_checkpoint_file, predict  # noqa: E402
+from src.train.loop import load_checkpoint_file  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
-from src.xai.runner import model_img_size  # noqa: E402
+from src.xai.runner import (  # noqa: E402
+    SITE_SEP,
+    load_case_set,
+    model_img_size,
+    predict_case_logits,
+)
 
 log = get_logger("pool_cv")
 
@@ -77,11 +76,7 @@ def main() -> None:
     log.info("device=%s labels=%s", device, ", ".join(labels))
 
     dataset = primary_dataset(cfg)
-    cache_dir = Path(cfg.data.cache_dir) / dataset
     adir = artifacts_dir(cfg)
-    patient_ids, y = load_label_matrix(adir / f"labels_{dataset}.csv", labels)
-    patient_ids, y = restrict_to_cache(patient_ids, y, cache_dir)
-    index = {pid: i for i, pid in enumerate(patient_ids)}
 
     folds = load_folds(adir / "cv_folds.json")
     check_folds_disjoint(folds)
@@ -102,17 +97,13 @@ def main() -> None:
         if not ckpt_path.exists():
             raise SystemExit(f"{ckpt_path} missing -- round {k} has not finished")
 
-        test_ids = [p for p in fold_assignment(folds, k)["test"] if p in index]
-        rows = np.array([index[p] for p in test_ids], dtype=int)
-        y_test = y[rows]
-
-        loader = DataLoader(
-            CachedVolumeDataset(cache_dir, test_ids, y_test, augment=None, seed=cfg.seed),
-            batch_size=cfg.train.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            pin_memory=device.type == "cuda",
-        )
+        # Each round predicts ONLY on its own held-out fold, so no case is ever
+        # scored by a model that trained on it. load_case_set applies that
+        # fold's partition and works on either task.
+        cases = load_case_set(cfg, "test", dataset, fold=k)
+        test_ids, targets = cases.ids, cases.y
+        if not test_ids:
+            raise SystemExit(f"round {k} has no held-out cases")
 
         model = build_model(cfg.model, img_size=model_img_size(cfg))
         ckpt = load_checkpoint_file(ckpt_path, device)
@@ -123,7 +114,8 @@ def main() -> None:
         model.load_state_dict(ckpt["model"])
         model.to(device).eval()
 
-        probs, targets = predict(model, loader, device, amp=bool(cfg.train.amp))
+        logits = predict_case_logits(model, cases, device, batch_size=cfg.train.batch_size)
+        probs = 1.0 / (1.0 + np.exp(-logits))
 
         # Thresholds come from that round's own validation fold, never from the
         # pooled set -- picking one threshold on all 532 would tune it on the
@@ -158,13 +150,17 @@ def main() -> None:
     pred_csv = adir / "cv_predictions.csv"
     with pred_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["patient_id", "fold"]
+        w.writerow(["case_id", "patient_id", "fold"]
                    + [f"true_{n}" for n in labels]
                    + [f"prob_{n}" for n in labels]
                    + [f"pred_{n}" for n in labels])
+        # Folds hold PATIENT ids. On the site task a case id is
+        # "<patient>#<tooth>", so the fold is looked up by the patient it
+        # belongs to -- 28 sites from one scan always move together.
         fold_of = {p: k for k, f in enumerate(folds) for p in f}
-        for i, pid in enumerate(pooled_ids):
-            w.writerow([pid, fold_of[pid]]
+        for i, case_id in enumerate(pooled_ids):
+            pid = str(case_id).split(SITE_SEP)[0]
+            w.writerow([case_id, pid, fold_of[pid]]
                        + y_true[i].astype(int).tolist()
                        + [f"{v:.6f}" for v in y_prob[i]]
                        + y_pred[i].tolist())
