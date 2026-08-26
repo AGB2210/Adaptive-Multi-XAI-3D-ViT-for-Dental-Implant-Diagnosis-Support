@@ -1,0 +1,61 @@
+# Runs on every push and pull request. Four gates, cheapest first, so a typo
+# fails in seconds rather than after the test suite.
+#
+# Action versions are held at the current major. GitHub is retiring the Node 20
+# runtime, and an action pinned to a major that still declares node20 is forced
+# onto node24 with a deprecation warning until it eventually stops running at
+# all. Bump these together when the next major lands rather than waiting for the
+# warning to become a failure.
+#
+# The suite needs no data and no GPU by design — it runs against synthetic
+# volumes — so CI verifies the whole pipeline without downloading any cohort.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch: CI has no GPU, and the CUDA wheel is ~2.5 GB.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          # Pinned: the lint rules are pinned in pyproject for a reason, and an
+          # unpinned linter reintroduces exactly the drift that pinning prevents.
+          pip install 'ruff==0.16.4'
+
+      - name: Version is the single source of truth
+        run: python scripts/version.py --check
+
+      - name: Every module imports
+        # Catches syntax errors and broken imports in code the tests do not
+        # reach - a script that only fails when someone runs it on a GPU box
+        # is a script that fails in front of the user.
+        run: python scripts/check_imports.py
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: python -m pytest -q

@@ -1,0 +1,85 @@
+# Runs when a v* tag is pushed. Tagging and pushing are done by hand; this
+# workflow only judges what arrives.
+#
+# It re-runs the full CI gate rather than trusting a green tick elsewhere: CI
+# and Release judge a commit independently, so a tag can point at a commit CI
+# never approved. The tag must also agree with VERSION — a release that calls
+# itself something other than what the code reports is worse than no release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Tag must agree with VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(python scripts/version.py)"
+          echo "tag=$tag  VERSION=$file"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag v$tag disagrees with VERSION $file — run scripts/version.py --set $tag and commit before tagging"
+            exit 1
+          fi
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: python -m pytest tests/ -q
+
+      - name: Build source archive
+        # Code only. The 4.3 GB artifacts/ cache is regenerated with
+        # scripts/build_labels.py and scripts/build_cache.py; shipping it here
+        # would put generated data in a release that is meant to be source.
+        run: |
+          name="capstone-${GITHUB_REF_NAME}"
+          git archive --format=tar.gz --prefix="${name}/" -o "${name}.tar.gz" HEAD
+          ls -la "${name}.tar.gz"
+
+      - name: Archive contains what it claims
+        # A release once shipped without VERSION and every install called itself
+        # 0.0.0+unknown. Asking "did it build?" would not have caught that.
+        run: |
+          name="capstone-${GITHUB_REF_NAME}"
+          rm -rf _smoke && mkdir _smoke
+          tar xzf "${name}.tar.gz" -C _smoke
+          root="_smoke/${name}"
+          test -f "$root/VERSION"        || { echo "::error::VERSION missing from archive"; exit 1; }
+          test -f "$root/README.md"      || { echo "::error::README.md missing"; exit 1; }
+          test -d "$root/src/xai"        || { echo "::error::src/xai missing"; exit 1; }
+          test -d "$root/tests"          || { echo "::error::tests missing"; exit 1; }
+          got="$(cat "$root/VERSION")"
+          want="${GITHUB_REF_NAME#v}"
+          [ "$got" = "$want" ] || { echo "::error::archive reports $got, expected $want"; exit 1; }
+          echo "archive reports version $got"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v3
+        with:
+          files: capstone-${{ github.ref_name }}.tar.gz
+          generate_release_notes: true

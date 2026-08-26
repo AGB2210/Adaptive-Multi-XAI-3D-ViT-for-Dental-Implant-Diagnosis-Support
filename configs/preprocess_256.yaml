@@ -1,0 +1,48 @@
+# 0.5 mm / 256^3 preprocessing. Overrides default.yaml for the resolution
+# experiment; everything not listed here is inherited from it.
+#
+# Run:
+#   python scripts/build_cache.py --config configs/preprocess_256.yaml --dataset toothfairy3
+#
+# BOTH cache_dir and artifacts_dir move, and that is not redundant.
+#
+#   cache_dir     because the cached file is named {patient_id}.npy with no
+#                 resolution in the name. Writing a 256^3 build into the 1 mm
+#                 cache directory either silently skips all 532 cases (they
+#                 already exist) or, with --force, destroys the 1 mm cache that
+#                 every number in REPORT.md rests on.
+#
+#   artifacts_dir because build_cache.py merges preprocess_manifest.csv on
+#                 (dataset, patient_id). A 256^3 build writing into artifacts/
+#                 would overwrite the 1 mm provenance row by row while appearing
+#                 to succeed -- the volumes would survive and the record of how
+#                 they were made would not.
+#
+# Labels and CV folds are NOT rebuilt. artifacts/labels_toothfairy3.csv and
+# artifacts/cv_folds.json are derived from the segmentation masks and the case
+# ids, so they are resolution-independent. Training at 0.5 mm should point
+# artifacts_dir back at artifacts/ to reuse them -- that is what keeps the two
+# resolutions directly comparable rather than two unrelated experiments.
+
+extends: default.yaml
+
+data:
+  cache_dir: artifacts_256/cache
+  artifacts_dir: artifacts_256
+
+preprocess:
+  target_spacing: 0.5
+  out_shape: [256, 256, 256]
+  # 0.5 x 256 = 128 mm, exactly the field of view of the 1 mm / 128^3 build.
+  # Held constant on purpose: resolution is then the only variable between the
+  # two caches, and a difference in results cannot be blamed on a changed crop.
+  workers: 3                          # 33.5 MB per volume -- fewer workers, more RAM each
+
+train:
+  # 8x the voxels. 4 GB of VRAM does not fit batch 4 at this resolution; batch 1
+  # with accum_steps 4 keeps the EFFECTIVE batch at 4, so lr stays 3.0e-5 and the
+  # comparison against the 1 mm result stays honest. Raising the batch size on a
+  # bigger card would confound resolution with batch size and the experiment
+  # would answer nothing.
+  batch_size: 1
+  accum_steps: 4

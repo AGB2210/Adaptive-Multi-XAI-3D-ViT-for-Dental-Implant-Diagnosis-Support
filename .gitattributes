@@ -1,0 +1,11 @@
+# Normalise line endings: LF in the repository and on checkout.
+# The team is on Windows; training runs on Linux GPU machines. Without this,
+# every file shows as fully changed when edited on the other OS.
+* text=auto eol=lf
+
+# Never touch binary artefacts.
+*.png  binary
+*.npy  binary
+*.nii  binary
+*.gz   binary
+*.pt   binary

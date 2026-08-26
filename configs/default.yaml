@@ -1,0 +1,124 @@
+# Default experiment config.
+#
+# Dataset roots are runtime configuration and differ per machine. Override with
+# <NAME>_ROOT env vars -- TOOTHFAIRY3_ROOT for the dataset named toothfairy3 --
+# which always win over the values here. Never commit a real path.
+#
+# NOT YET FILLED IN: task.labels and the ToothFairy3 layout. Both wait on the
+# download, because guessing the class indices would produce a config that looks
+# right and trains against the wrong columns.
+
+seed: 1337
+
+data:
+  datasets:
+    toothfairy3:
+      # nnU-Net layout: flat imagesTr/ and labelsTr/, not a directory per case.
+      # `cases` globs the LABELS side on purpose -- a volume with no mask is then
+      # never enumerated, so it cannot silently become a negative case.
+      root: ToothFairy3
+      cases: "labelsTr/*.nii.gz"
+      volume: "imagesTr/{pid}_0000.nii.gz"
+      labels: "labelsTr/{pid}.nii.gz"
+  primary: toothfairy3                  # trained and model-selected on this cohort
+  # external:                           # scored once at the end, never trained on
+  cache_dir: artifacts/cache
+  artifacts_dir: artifacts
+
+task:
+  # A case is positive for a class when that class occupies at least min_voxels
+  # in its mask. scripts/build_labels.py turns that into artifacts/labels_*.csv.
+  #
+  # EMPTY ON PURPOSE. The class indices must be read off ToothFairy3's own class
+  # list, not guessed: an index wrong by one trains the model against a different
+  # anatomical structure, and every metric downstream still looks reasonable.
+  # Read from ToothFairy3's own dataset.json, not guessed: 78 classes, of which
+  # Bridge=8, Crown=9, Implant=10.
+  labels: [implant, crown, bridge]
+  class_indices: {implant: 10, crown: 9, bridge: 8}
+  #
+  # Measured across 60 masks: no case has a class in the 1-49 voxel band. Every
+  # class is either absent or substantially present, so this threshold changes no
+  # label and exists only to reject annotation speckle if a later cohort has any.
+  # For scale, a present implant is ~4,245 voxels at 0.3 mm, i.e. ~115 mm^3 --
+  # the physical size of a real 4x10 mm fixture.
+  min_voxels: 50
+
+preprocess:
+  target_spacing: 1.0                 # mm, isotropic
+  out_shape: [128, 128, 128]
+  # isotropic_pad: 1 mm voxels, centre pad/crop to out_shape. Keeps physical scale
+  #   identical across cohorts -- required for any cross-cohort claim to mean
+  #   anything. resize stretches the crop instead and makes a millimetre mean
+  #   different things in different cohorts. Do not change this to resize.
+  fit_mode: isotropic_pad
+  fg_percentile: 60.0                 # threshold = percentile of the whole volume
+  fg_margin: 0.05
+  # clip_mode 'fixed' keeps absolute brightness comparable between patients. A
+  # per-patient percentile is scale-free, which is right for anatomy and wrong for
+  # metal: implants are hyperdense and sit in the top 0.01% of the histogram, so a
+  # 99.5th-percentile clip flattens them onto cortical bone. Measured on the prior
+  # cohort, voxels above 4000 were 10.5x more common in implant-positive patients
+  # and the percentile clip discarded all of them.
+  clip_mode: fixed
+  clip_window: [-1000.0, 6000.0]
+  clip_percentiles: [0.5, 99.5]       # only used when clip_mode is 'percentile'
+  workers: 6
+  dtype: float16
+
+split:
+  ratios: [0.70, 0.15, 0.15]
+  seed: 1337
+
+model:
+  name: vit3d
+  in_channels: 1
+  stem_channels: 32                   # conv stem output width
+  embed_dim: 256
+  patch_size: 8                       # on the stem output (64^3) -> 8^3 = 512 tokens
+  depth: 6
+  num_heads: 4
+  mlp_ratio: 4.0
+  dropout: 0.1
+  attn_dropout: 0.0
+  drop_path: 0.2
+  num_classes: 3                      # follows task.labels; train.py enforces it
+
+train:
+  epochs: 100
+  batch_size: 4
+  accum_steps: 1
+  # Measured, not inherited. At lr 3.0e-4 this model does not train at all: the
+  # loss sits on the no-information floor (the value of a constant prediction)
+  # until the cosine schedule decays it below ~3e-5. The linear scaling rule --
+  # 1e-3 at batch 1024 -- predicts 1.6e-5 at batch 4, so 3.0e-4 was ~20x too high.
+  lr: 3.0e-5
+  weight_decay: 0.05
+  warmup_epochs: 5
+  grad_clip: 1.0
+  amp: true
+  num_workers: 4
+  # Off deliberately: at this LR the loss does not move until roughly epoch 40, and
+  # on a small validation split a noise-driven new best keeps resetting the
+  # counter, so the rule fires both too early and never. Run the full schedule.
+  early_stop_patience: 0
+  out_dir: artifacts/runs
+
+augment:
+  translate_voxels: 8
+  translate_prob: 0.5
+  # Only anatomically sane axes: left-right flip is the sagittal mirror.
+  # Never flip anterior-posterior or superior-inferior.
+  flip_lr_prob: 0.5
+  rotate_deg: 10.0
+  rotate_prob: 0.5
+  intensity_shift: 0.1
+  intensity_scale: 0.1
+  gamma_range: [0.7, 1.5]
+  gamma_prob: 0.3
+  noise_std: 0.05
+  noise_prob: 0.3
+
+eval:
+  bootstrap_n: 2000
+  bootstrap_ci: 0.95

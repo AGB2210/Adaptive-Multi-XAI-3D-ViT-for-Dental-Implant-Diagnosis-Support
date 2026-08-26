@@ -1,0 +1,38 @@
+# Generated outputs — never commit. Rebuild with scripts/build_labels.py,
+# scripts/build_cache.py, and the training/evaluation scripts.
+# artifacts_*/ covers alternate preprocessing builds, which keep their own
+# manifest and previews so they cannot overwrite each other's provenance.
+artifacts/
+artifacts_*/
+*.log
+
+# Datasets are external and live outside the repo; roots come from config or
+# <NAME>_ROOT env vars. These patterns are a backstop for the case where someone
+# unpacks a cohort inside the working tree by accident -- a single CBCT volume is
+# tens of megabytes and there is no recovering a repo that has swallowed one.
+*.nii
+*.nii.gz
+*.dcm
+*.mha
+*.nrrd
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Packaging
+*.tar.gz
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

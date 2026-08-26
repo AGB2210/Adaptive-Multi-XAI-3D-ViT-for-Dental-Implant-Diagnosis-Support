@@ -1,0 +1,24 @@
+# Adaptive Multi-XAI Vision Transformer — runtime dependencies
+# Verified working set: Python 3.11, torch 2.12.1+cu126, numpy 2.3.5
+#
+# Lower bounds, not pins: this has to install on a rented GPU box whose CUDA
+# wheel dictates the torch version. numpy is the exception -- see below.
+
+# Install torch FIRST, matched to your CUDA version, from https://pytorch.org
+# e.g. CUDA 12.6:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+torch>=2.2
+
+numpy>=2.0        # np.trapezoid (faithfulness curves) is numpy>=2.0 only
+scipy>=1.11
+nibabel>=5.2
+pandas>=2.0
+PyYAML>=6.0
+matplotlib>=3.8
+
+# Testing. ruff is pinned in the CI workflow, not here: it gates the repo
+# rather than running in it.
+pytest>=8.0
+
+# Optional: training also logs to CSV without it
+# tensorboard>=2.16

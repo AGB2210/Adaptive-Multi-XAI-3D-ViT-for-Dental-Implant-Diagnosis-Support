@@ -1,0 +1,80 @@
+# The convergence gate, and the config CI runs against.
+#
+# Planted-signal volumes with a bright blob at a known site per label. The task
+# is deliberately easy: if the model cannot learn it, the fault is in the code
+# -- wrong loss, misaligned labels, gradients not flowing -- not in the problem.
+# Two minutes on CPU against an hour on the real data, so it is the cheapest
+# place to find a broken pipeline. Same code path as the real config.
+
+seed: 1337
+
+task:
+  labels: [synthetic_0, synthetic_1, synthetic_2, synthetic_3, synthetic_4, synthetic_5]
+
+data:
+  # No real cohort: --synthetic builds its volumes in memory. The dataset entry
+  # exists so the config validates against the same schema as a real run.
+  datasets:
+    synthetic:
+      root: .
+      volume: "{pid}/volume.nii.gz"
+  primary: synthetic
+  cache_dir: artifacts/cache
+  artifacts_dir: artifacts
+
+preprocess:
+  target_spacing: 1.0
+  out_shape: [32, 32, 32]
+  fit_mode: isotropic_pad
+  fg_margin: 0.05
+  clip_mode: fixed                    # see configs/default.yaml for why
+  clip_window: [-1000.0, 6000.0]
+  clip_percentiles: [0.5, 99.5]       # only used when clip_mode is 'percentile'
+  workers: 2
+  dtype: float16
+
+split:
+  ratios: [0.70, 0.15, 0.15]
+  seed: 1337
+
+model:
+  name: vit3d
+  in_channels: 1
+  stem_channels: 16
+  embed_dim: 128
+  patch_size: 4          # 32 -> stem 16 -> 4x4x4 = 64 tokens
+  depth: 4
+  num_heads: 4
+  mlp_ratio: 4.0
+  dropout: 0.0
+  attn_dropout: 0.0
+  drop_path: 0.0
+  num_classes: 6
+
+train:
+  epochs: 100
+  batch_size: 8
+  accum_steps: 1
+  lr: 1.0e-3
+  weight_decay: 0.01
+  warmup_epochs: 2
+  grad_clip: 1.0
+  amp: false             # CPU: AMP is a slowdown
+  num_workers: 0
+  early_stop_patience: 25
+  out_dir: artifacts/runs                # per-model subdirectory is appended
+
+augment:
+  flip_lr_prob: 0.0      # the planted signal is lateralised; do not mirror it away
+  rotate_deg: 0.0
+  rotate_prob: 0.0
+  intensity_shift: 0.05
+  intensity_scale: 0.05
+  gamma_range: [0.9, 1.1]
+  gamma_prob: 0.0
+  noise_std: 0.02
+  noise_prob: 0.3
+
+eval:
+  bootstrap_n: 200
+  bootstrap_ci: 0.95

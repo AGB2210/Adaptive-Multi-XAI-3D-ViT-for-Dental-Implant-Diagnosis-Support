@@ -1,0 +1,305 @@
+"""Train a model on the primary cohort's cache.
+
+    python scripts/train.py --config configs/default.yaml                  # ViT
+    python scripts/train.py --config configs/default.yaml --model cnn3d    # CNN baseline
+    python scripts/train.py --config configs/synthetic.yaml --synthetic    # convergence check
+
+The TEST split is not scored unless --test is passed. Selecting a model while
+watching its test score is leakage even when no threshold is tuned on it.
+
+Splits are created once and persisted to artifacts/splits.json; every later run
+(and the whole XAI phase) reuses them.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.data.augment import Augment3D  # noqa: E402
+from src.data.dataset import (  # noqa: E402
+    CachedVolumeDataset,
+    load_label_matrix,
+    pos_weight_from_labels,
+    restrict_to_cache,
+)
+from src.data.splits import (  # noqa: E402
+    check_disjoint,
+    check_folds_disjoint,
+    fold_assignment,
+    load_folds,
+    load_splits,
+    make_cv_folds,
+    make_splits,
+    save_folds,
+    save_splits,
+    split_prevalence,
+)
+from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
+from src.models import build_model  # noqa: E402
+from src.models.prevalence import PrevalenceBaseline  # noqa: E402
+from src.train.loop import Trainer, predict  # noqa: E402
+from src.train.metrics import evaluate, format_metrics  # noqa: E402
+from src.utils.config import artifacts_dir, load_config  # noqa: E402
+from src.utils.log import get_logger  # noqa: E402
+from src.utils.seed import set_seed, worker_init_fn  # noqa: E402
+
+log = get_logger("train_script")
+
+
+def build_cv_folds(cfg, patient_ids, y, label_names, n_folds: int, force: bool = False):
+    """Persisted K-fold partition. Created once, then reused by every round.
+
+    Regenerating between rounds would put a case in training for one round and
+    testing for another under a different partition, which quietly destroys the
+    guarantee that each case is scored exactly once by a model that never saw it.
+    """
+    path = artifacts_dir(cfg) / "cv_folds.json"
+    if path.exists() and not force:
+        folds = load_folds(path)
+        known = set(patient_ids)
+        unknown = [p for f in folds for p in f if p not in known]
+        if unknown:
+            raise ValueError(
+                f"{path} references {len(unknown)} cases absent from the label/cache set "
+                f"(e.g. {unknown[:5]}). Delete it or pass --new-splits to rebuild."
+            )
+        if len(folds) != n_folds:
+            raise ValueError(f"{path} holds {len(folds)} folds but --folds asked for {n_folds}; "
+                             "pass --new-splits to rebuild rather than mixing partitions")
+        log.info("reusing %d-fold partition from %s", len(folds), path)
+    else:
+        folds = make_cv_folds(patient_ids, y, n_folds=n_folds, seed=cfg.split.seed)
+        save_folds(folds, path, meta={"seed": cfg.split.seed, "n_folds": n_folds,
+                                      "labels": label_names, "n_cases": len(patient_ids)})
+        log.info("wrote %d-fold partition to %s", n_folds, path)
+
+    check_folds_disjoint(folds)
+    return folds
+
+
+def build_splits(cfg, patient_ids, y, label_names, force: bool = False):
+    path = artifacts_dir(cfg) / "splits.json"
+    if path.exists() and not force:
+        splits = load_splits(path)
+        known = set(patient_ids)
+        unknown = [p for ids in splits.values() for p in ids if p not in known]
+        if unknown:
+            raise ValueError(
+                f"{path} references {len(unknown)} patients absent from the label/cache set "
+                f"(e.g. {unknown[:5]}). Delete it or pass --new-splits to rebuild."
+            )
+        log.info("reusing splits from %s", path)
+    else:
+        splits = make_splits(patient_ids, y, tuple(cfg.split.ratios), seed=cfg.split.seed)
+        save_splits(
+            splits,
+            path,
+            meta={
+                "seed": cfg.split.seed,
+                "ratios": list(cfg.split.ratios),
+                "labels": label_names,
+                "n_patients": len(patient_ids),
+                "prevalence": split_prevalence(splits, patient_ids, y),
+            },
+        )
+        log.info("wrote new splits to %s", path)
+
+    check_disjoint(splits)
+    return splits
+
+
+def make_loaders(cfg, splits, patient_ids, y, cache_dir, args):
+    index = {pid: i for i, pid in enumerate(patient_ids)}
+    augment = Augment3D(cfg.augment)
+    loaders, matrices = {}, {}
+
+    for name in ("train", "val", "test"):
+        ids = [p for p in splits[name] if p in index]
+        rows = np.array([index[p] for p in ids], dtype=int)
+        labels = y[rows]
+        matrices[name] = (ids, labels)
+
+        dataset = CachedVolumeDataset(
+            cache_dir,
+            ids,
+            labels,
+            augment=augment if name == "train" else None,
+            preload=args.preload,
+            seed=cfg.seed,
+        )
+        loaders[name] = DataLoader(
+            dataset,
+            batch_size=cfg.train.batch_size,
+            shuffle=(name == "train"),
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=False,
+            worker_init_fn=worker_init_fn,
+            persistent_workers=args.num_workers > 0,
+        )
+    return loaders, matrices
+
+
+def synthetic_loaders(cfg, n_train: int = 96, n_val: int = 32):
+    """Tiny in-memory synthetic task -- convergence here is a prerequisite for
+    launching any real run."""
+    from tests.synthetic import make_dataset
+
+    shape = tuple(cfg.preprocess.out_shape)
+    xtr, ytr = make_dataset(n_train, seed=0, shape=shape)
+    xva, yva = make_dataset(n_val, seed=10_000, shape=shape)
+
+    def loader(x, y, shuffle):
+        ds = TensorDataset(torch.from_numpy(x).float(), torch.from_numpy(y).float())
+        return DataLoader(ds, batch_size=cfg.train.batch_size, shuffle=shuffle)
+
+    return {"train": loader(xtr, ytr, True), "val": loader(xva, yva, False)}, {
+        "train": (None, ytr),
+        "val": (None, yva),
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/default.yaml")
+    ap.add_argument("--model", default=None, choices=["vit3d", "cnn3d"])
+    ap.add_argument("--synthetic", action="store_true", help="train on planted-signal data")
+    ap.add_argument("--epochs", type=int, default=None)
+    ap.add_argument("--num-workers", dest="num_workers", type=int, default=None)
+    ap.add_argument("--preload", action="store_true", help="hold the cache in RAM (~1.7 GB)")
+    ap.add_argument("--new-splits", dest="new_splits", action="store_true")
+    ap.add_argument("--fold", type=int, default=None,
+                    help="cross-validation round to run; omit for a single train/val/test split")
+    ap.add_argument("--folds", type=int, default=5, help="number of CV folds (with --fold)")
+    ap.add_argument(
+        "--test",
+        action="store_true",
+        help="also score the TEST split. Off by default on purpose: see the note in the source.",
+    )
+    ap.add_argument("--resume", default=None, help="checkpoint to resume from")
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args()
+
+    cfg = load_config(args.config)
+    if args.model:
+        cfg.model.name = args.model
+    args.num_workers = cfg.train.num_workers if args.num_workers is None else args.num_workers
+
+    # The head count follows the label subset, never the other way round -- a
+    # config whose num_classes disagreed with data.train_labels would train
+    # silently against misaligned columns.
+    labels = label_names_for(cfg)
+    if cfg.model.num_classes != len(labels):
+        log.info("num_classes %d -> %d to match data.train_labels",
+                 cfg.model.num_classes, len(labels))
+        cfg.model.num_classes = len(labels)
+    log.info("training on %d labels: %s", len(labels), ", ".join(labels))
+
+    set_seed(cfg.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    log.info("device=%s model=%s", device, cfg.model.name)
+    if device.type == "cpu":
+        log.warning("no CUDA device: a 12-layer 3D ViT on CPU is impractical for a full run")
+
+    run_name = cfg.model.name + ("_synthetic" if args.synthetic else "")
+    out_dir = Path(args.out or Path(cfg.train.out_dir) / run_name)
+
+    # ---- data ----------------------------------------------------------
+    if args.synthetic:
+        loaders, matrices = synthetic_loaders(cfg)
+        y_train = matrices["train"][1]
+    else:
+        dataset = primary_dataset(cfg)
+        cache_dir = Path(cfg.data.cache_dir) / dataset
+        patient_ids, y = load_label_matrix(artifacts_dir(cfg) / f"labels_{dataset}.csv", labels)
+        patient_ids, y = restrict_to_cache(patient_ids, y, cache_dir)
+        log.info("%d patients with both labels and a cached volume", len(patient_ids))
+        if not patient_ids:
+            raise SystemExit("no cached volumes found -- run scripts/build_cache.py first")
+
+        if args.fold is None:
+            splits = build_splits(cfg, patient_ids, y, labels, force=args.new_splits)
+        else:
+            folds = build_cv_folds(cfg, patient_ids, y, labels, args.folds, force=args.new_splits)
+            splits = fold_assignment(folds, args.fold)
+            check_disjoint(splits)
+            log.info("cross-validation round %d of %d: test=fold %d, val=fold %d",
+                     args.fold, len(folds), args.fold, (args.fold + 1) % len(folds))
+        loaders, matrices = make_loaders(cfg, splits, patient_ids, y, cache_dir, args)
+        y_train = matrices["train"][1]
+        for name in ("train", "val", "test"):
+            log.info("%-5s n=%3d prevalence=%s", name, len(matrices[name][0]),
+                     np.round(matrices[name][1].mean(axis=0), 3).tolist())
+
+    # ---- prevalence baseline (free, always reported) --------------------
+    baseline = PrevalenceBaseline(len(labels)).fit(y_train)
+    for name in ("val", "test"):
+        if name not in matrices:
+            continue
+        y_true = matrices[name][1]
+        metrics = evaluate(y_true, baseline.predict_proba(len(y_true)), labels)
+        print("\n" + format_metrics(metrics, labels, f"PREVALENCE BASELINE -- {name}"))
+
+    # ---- model ---------------------------------------------------------
+    model = build_model(cfg.model, img_size=cfg.preprocess.out_shape[0])
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info("%s: %.1fM trainable parameters", cfg.model.name, n_params / 1e6)
+
+    trainer = Trainer(
+        model,
+        cfg,
+        labels,
+        pos_weight=pos_weight_from_labels(y_train),
+        device=device,
+        out_dir=out_dir,
+    )
+    if args.resume:
+        trainer.load_checkpoint(args.resume)
+
+    result = trainer.fit(loaders["train"], loaders["val"], epochs=args.epochs)
+    log.info("best val macro AUROC: %.4f", result["best_macro_auroc"])
+
+    # ---- final evaluation ----------------------------------------------
+    best = out_dir / "best.pt"
+    if best.exists():
+        trainer.load_checkpoint(best, resume=False)
+
+    probs, targets = predict(trainer.model, loaders["val"], device, trainer.amp)
+    val_metrics = evaluate(targets, probs, labels, n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+    print("\n" + format_metrics(val_metrics, labels, f"{cfg.model.name.upper()} -- val"))
+
+    summary = {"val": val_metrics, "n_params": n_params, "model": cfg.model.name,
+               "labels": labels}
+
+    # The test split is scored only when asked for. Printing it after every run
+    # leaks it by repetition: the capacity ladder in the README trains several
+    # models and picks one, and a number you have seen has influenced you whether
+    # or not you tuned a threshold on it. Train and select on validation; run
+    # scripts/evaluate.py (or --test) once, at the end.
+    if args.test and "test" in loaders:
+        log.warning("scoring the TEST split -- do this once, after model selection is final")
+        # Thresholds tuned on val, applied unchanged to test -- no leakage.
+        probs, targets = predict(trainer.model, loaders["test"], device, trainer.amp)
+        test_metrics = evaluate(
+            targets, probs, labels,
+            thresholds=val_metrics["thresholds"],
+            n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci,
+        )
+        print("\n" + format_metrics(test_metrics, labels, f"{cfg.model.name.upper()} -- test"))
+        summary["test"] = test_metrics
+
+    (out_dir / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log.info("wrote %s", out_dir / "metrics.json")
+
+
+if __name__ == "__main__":
+    main()

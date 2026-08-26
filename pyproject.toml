@@ -1,0 +1,44 @@
+# Tooling config lives in one file so a contributor changes settings in one place
+# and CI cannot drift from what runs locally.
+#
+# The project is deliberately NOT packaged for install. Scripts are entry points
+# run from the repo root, and a research repo that must be pip-installed before a
+# figure can be regenerated is a repo whose figures stop being regenerated.
+
+[project]
+name = "adaptive-multi-xai-vit"
+version = "0.1.0"
+description = "3D Vision Transformer with an adaptive multi-method explainability layer that measures its own faithfulness"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Import mode "importlib" plus rootdir on sys.path lets tests import `src.*` and
+# `tests.*` without either a package install or a sys.path hack in every file.
+addopts = "-q --import-mode=importlib"
+pythonpath = ["."]
+filterwarnings = [
+    # Surface anything new; the suite is expected to be warning-clean.
+    "error::DeprecationWarning:src.*",
+]
+
+[tool.ruff]
+# Rules are pinned deliberately. With no config, `ruff check` runs whatever the
+# installed release defaults to, so the gate would change meaning whenever the
+# tool updates. E4/E7/E9/F is things that are *wrong*, not things that are
+# unfashionable.
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts insert the repo root on sys.path before importing `src`, so their
+# imports cannot sit at the top of the file. E402 is already suppressed inline;
+# this records why.
+"scripts/*.py" = ["E402"]
+
+# pytest's fixture-sharing pattern imports a fixture by name and then names it
+# again as a test parameter. Pyflakes reads that as shadowing; pytest reads it
+# as injection.
+"tests/*.py" = ["F811"]
