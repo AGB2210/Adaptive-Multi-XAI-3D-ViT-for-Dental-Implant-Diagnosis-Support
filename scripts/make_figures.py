@@ -33,6 +33,7 @@ from src.xai.adaptive import EVAL_METRIC, WEIGHT_METRIC, fuse  # noqa: E402
 from src.xai.base import make_baseline  # noqa: E402
 from src.xai.calibration import apply_temperature  # noqa: E402
 from src.xai.runner import (  # noqa: E402
+    load_case_set,
     load_cases,
     load_model,
     load_volume,
@@ -98,7 +99,8 @@ def main() -> None:
     figures = art / "figures" / "cases"
 
     primary = primary_dataset(cfg)
-    ids, y, cache, label_names = load_cases(cfg, "test", primary, fold=fold)
+    cases = load_case_set(cfg, "test", primary, fold=fold)
+    ids, y, cache, label_names = cases.ids, cases.y, cases.cache, cases.labels
     logits = predict_logits(model, cache, ids, device)
 
     calib_path = art / "calibration" / "calibration.json"
@@ -127,7 +129,7 @@ def main() -> None:
     for group, members in groups.items():
         for pid in members:
             i = index[pid]
-            volume = load_volume(cache, pid, device)
+            volume = cases.load(pid, device)
             baseline = make_baseline(volume, "blur")
             target = int(np.argmax(probs[i]))
 

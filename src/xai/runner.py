@@ -11,12 +11,21 @@ are the ones its checkpoint never saw.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 
+import pandas as pd
+
 from src.data.dataset import load_label_matrix, restrict_to_cache
+from src.data.site_dataset import (
+    cut_patch,
+    load_sites,
+    restrict_sites_to_cache,
+    target_matrix,
+)
 from src.data.splits import check_disjoint, fold_assignment, load_folds, load_splits
 from src.data.taskdef import external_dataset, label_names_for, primary_dataset
 from src.models import build_model
@@ -57,7 +66,12 @@ def require_prerequisites(cfg, checkpoint: str | Path | None = None, need_extern
     primary = primary_dataset(cfg)
 
     partition = "cv_folds.json" if fold is not None else "splits.json"
-    needed = [f"labels_{primary}.csv", partition]
+    sites_csv = getattr(cfg.task, "sites_csv", None)
+    label_file = sites_csv if sites_csv else f"labels_{primary}.csv"
+    builder = ("scripts/build_implant_labels.py" if sites_csv
+               else "scripts/build_labels.py")
+
+    needed = [label_file, partition]
     external = external_dataset(cfg) if need_external else None
     if external:
         needed.append(f"labels_{external}.csv")
@@ -70,13 +84,14 @@ def require_prerequisites(cfg, checkpoint: str | Path | None = None, need_extern
                     f"cross-validation partition)") if (art / other).is_file() else ""
             problems.append(f"missing {art / name} -- run scripts/train.py{hint}")
         else:
-            problems.append(f"missing {art / name} -- run scripts/build_labels.py")
+            problems.append(f"missing {art / name} -- run {builder}")
 
     for name in [primary] + ([external] if external else []):
         cache = cache_dir_for(cfg, name)
         if not cache.is_dir() or not any(cache.glob("*.npy")):
-            problems.append(f"empty cache for {name} at {cache} "
-                            f"-- run scripts/build_cache.py --dataset {name}")
+            cache_builder = ("scripts/build_site_cache.py" if sites_csv
+                             else f"scripts/build_cache.py --dataset {name}")
+            problems.append(f"empty cache for {name} at {cache} -- run {cache_builder}")
 
     if checkpoint is not None and not Path(checkpoint).is_file():
         problems.append(f"no trained checkpoint at {checkpoint} -- run scripts/train.py")
@@ -162,6 +177,119 @@ def load_cases(cfg, split: str = "test", dataset: str | None = None, fold: int |
     return chosen, y[[index[p] for p in chosen]], cache, labels
 
 
+SITE_SEP = "#"
+
+
+@dataclass
+class CaseSet:
+    """The cases an XAI script explains, whichever task produced them.
+
+    The XAI stage was written when a case meant a whole scan. The site task makes
+    a case a (patient, tooth position) pair whose input is a small patch cut from
+    that patient's volume. Rather than teach five scripts the difference, both
+    pipelines produce one of these and the scripts ask it for an input.
+
+    `ids` are display identifiers: a patient id for the whole-volume task, and
+    "<patient>#<tooth>" for the site task, so a figure or a CSV row still names
+    exactly what was explained.
+    """
+
+    ids: list
+    y: np.ndarray
+    cache: Path
+    labels: list
+    sites: pd.DataFrame | None = None
+    patch_size: int | None = None
+
+    def __post_init__(self):
+        self._volumes: dict = {}
+        self._rows = {}
+        if self.sites is not None:
+            self._rows = {i: row for i, row in zip(self.ids, self.sites.to_dict("records"))}
+
+    @property
+    def is_sites(self) -> bool:
+        return self.sites is not None
+
+    def patient_of(self, case_id: str) -> str:
+        return case_id.split(SITE_SEP)[0]
+
+    def row(self, case_id: str):
+        """The site row behind a case, or None on the whole-volume task."""
+        return self._rows.get(case_id)
+
+    def _volume(self, patient_id: str) -> np.ndarray:
+        cached = self._volumes.get(patient_id)
+        if cached is None:
+            # Memory-mapped: a native-resolution cache is ~50 GB and a patch
+            # read should touch only the pages it needs.
+            cached = np.load(Path(self.cache) / f"{patient_id}.npy", mmap_mode="r")
+            self._volumes[patient_id] = cached
+        return cached
+
+    def load(self, case_id: str, device: torch.device) -> torch.Tensor:
+        """The model input for one case, as (1, 1, D, H, W) float32."""
+        if not self.is_sites:
+            return load_volume(self.cache, case_id, device)
+
+        row = self._rows.get(case_id)
+        if row is None:
+            raise KeyError(f"{case_id!r} is not in this case set")
+        volume = self._volume(row["patient_id"])
+        z = row.get("site_z", np.nan)
+        if not np.isfinite(z):
+            z = volume.shape[2] / 2.0
+        patch = cut_patch(volume, (row["site_x"], row["site_y"], z), int(self.patch_size))
+        arr = np.asarray(patch, dtype=np.float32)
+        return torch.from_numpy(np.ascontiguousarray(arr))[None, None].to(device)
+
+
+def site_case_ids(sites: pd.DataFrame) -> list:
+    return [f"{r.patient_id}{SITE_SEP}{int(r.tooth)}" for r in sites.itertuples()]
+
+
+def load_case_set(cfg, split: str = "test", dataset: str | None = None,
+                  fold: int | None = None) -> CaseSet:
+    """Cases for a split, from whichever task the config describes.
+
+    The partition is reused exactly as training made it and is never re-split.
+    For the site task the split file holds PATIENT ids -- 28 sites from one scan
+    share anatomy and annotator, so they move between folds together -- and the
+    site rows are selected by patient membership.
+    """
+    art = artifacts_dir(cfg)
+    dataset = dataset or primary_dataset(cfg)
+    cache = cache_dir_for(cfg, dataset)
+    labels = label_names_for(cfg)
+    sites_csv = getattr(cfg.task, "sites_csv", None)
+
+    if not sites_csv:
+        ids, y, cache, labels = load_cases(cfg, split, dataset, fold=fold)
+        return CaseSet(ids=list(ids), y=y, cache=cache, labels=labels)
+
+    methods = tuple(getattr(cfg.task, "site_methods", ("teeth",)))
+    jaws = tuple(getattr(cfg.task, "site_jaws", ("lower",)))
+    sites = load_sites(art / sites_csv, targets=labels, methods=methods, jaws=jaws)
+    sites = restrict_sites_to_cache(sites, cache)
+
+    if dataset == primary_dataset(cfg):
+        if fold is not None:
+            splits = fold_assignment(load_folds(art / "cv_folds.json"), fold)
+        else:
+            splits = load_splits(art / "splits.json")
+        check_disjoint(splits)
+        sites = sites[sites.patient_id.isin(set(splits[split]))].reset_index(drop=True)
+
+    return CaseSet(
+        ids=site_case_ids(sites),
+        y=target_matrix(sites, labels),
+        cache=cache,
+        labels=labels,
+        sites=sites,
+        patch_size=model_img_size(cfg),
+    )
+
+
 def load_volume(cache_dir: Path, patient_id: str, device: torch.device) -> torch.Tensor:
     """One cached volume as (1, 1, D, H, W) float32."""
     arr = np.load(Path(cache_dir) / f"{patient_id}.npy").astype(np.float32)
@@ -177,16 +305,20 @@ def training_baselines(cfg, n: int = 16, device: torch.device | None = None, see
     the fold must be threaded through here too: baselines built from the round's
     own held-out cases would put test data inside the explanation of test data.
     """
-    ids, _, cache, _ = load_cases(cfg, "train", fold=fold)
-    if not ids:
+    train = load_case_set(cfg, "train", fold=fold)
+    if not train.ids:
         return None, None
 
     rng = np.random.default_rng(seed)
-    chosen = rng.choice(len(ids), size=min(n, len(ids)), replace=False)
-    volumes = np.stack([np.load(Path(cache) / f"{ids[i]}.npy").astype(np.float32) for i in chosen])
+    chosen = rng.choice(len(train.ids), size=min(n, len(train.ids)), replace=False)
+    # On the site task a baseline is a training PATCH, not a whole scan: it has
+    # to be the same shape as the input being explained, and it has to come from
+    # a site the checkpoint was trained on.
+    cpu = torch.device("cpu")
+    stack = torch.cat([train.load(train.ids[i], cpu) for i in chosen])  # (n, 1, D, H, W)
 
-    baselines = torch.from_numpy(volumes)[:, None]
-    mean_volume = torch.from_numpy(volumes.mean(axis=0))[None, None]
+    baselines = stack
+    mean_volume = stack.mean(dim=0, keepdim=True)
     if device is not None:
         baselines, mean_volume = baselines.to(device), mean_volume.to(device)
     return baselines, mean_volume
@@ -199,5 +331,16 @@ def predict_logits(model, cache_dir, patient_ids, device, batch_size: int = 8) -
         batch = torch.cat([
             load_volume(cache_dir, pid, device) for pid in patient_ids[start : start + batch_size]
         ])
+        out.append(model(batch).cpu().numpy())
+    return np.concatenate(out) if out else np.zeros((0, 0))
+
+
+@torch.no_grad()
+def predict_case_logits(model, cases: CaseSet, device, batch_size: int = 8) -> np.ndarray:
+    """Logits for every case, on either task."""
+    out = []
+    for start in range(0, len(cases.ids), batch_size):
+        batch = torch.cat([cases.load(i, device)
+                           for i in cases.ids[start : start + batch_size]])
         out.append(model(batch).cpu().numpy())
     return np.concatenate(out) if out else np.zeros((0, 0))

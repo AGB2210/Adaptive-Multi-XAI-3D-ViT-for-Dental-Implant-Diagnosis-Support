@@ -27,16 +27,21 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Label builder, arch fitting, site measurement | **Done** — validated against real anatomy |
 | Site labels built | **Done** — 6,990 mandibular sites, 503 patients |
 | Native-resolution cache, patch dataset, training wiring | **Done** |
-| 272 tests | **Green** |
+| 292 tests | **Green** |
+| XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **Not started** — needs a rented GPU |
-| XAI stack on the site task | **Not wired** — see below |
 | Guide sign-off on clinical thresholds | **Pending** |
 
-**The XAI stack does not yet run on the site task.** `src/xai/runner.py` still
-loads whole-volume cases via `labels_<dataset>.csv` and `splits.json`. It needs
-the same branch `scripts/train.py` received: site rows instead of a label
-matrix, patch cutting instead of `load_volume`, and per-site masks for the
-localisation metrics. Do this before renting a GPU, not after.
+Both pipelines now produce a `CaseSet` (`src/xai/runner.py`), so the five XAI
+scripts no longer care which task they are on: a case is a whole scan or a
+`patient#tooth` pair, and `CaseSet.load` returns the right input either way.
+
+The localisation metric changed with it. It used to ask *"does the explanation
+point at the implant?"* — which metal passes trivially, and is how Integrated
+Gradients scored 86x chance while failing the randomisation check. It now asks
+*"the model says NOT feasible; does the explanation point at the inferior
+alveolar canal?"* The canal is a dark tube inside bone occupying 0.05-0.65% of a
+patch, so an edge detector cannot find it by accident.
 
 ## Quick start
 
@@ -119,9 +124,9 @@ scripts/       build_implant_labels, build_site_cache, train, evaluate,
 
 `scripts/build_labels.py`, `scripts/build_cache.py`, `src/data/dataset.py` and
 `configs/default.yaml`'s `task.labels` implement the earlier task — *is an
-implant, crown or bridge already present?* It is kept because it still runs, the
-XAI stack currently depends on it, and the randomisation findings below were
-measured on it. It is not the project's question. `configs/preprocess_256.yaml`
+implant, crown or bridge already present?* It is kept because it still runs, the XAI
+scripts still support it through the same `CaseSet`, and the randomisation
+findings below were measured on it. It is not the project's question. `configs/preprocess_256.yaml`
 belongs to the same path: a whole-head alternative, deliberately set aside.
 
 ## Datasets are configuration, never code

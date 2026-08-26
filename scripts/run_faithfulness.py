@@ -37,6 +37,7 @@ from src.xai.faithfulness import (  # noqa: E402
     model_randomization_check,
 )
 from src.xai.runner import (  # noqa: E402
+    load_case_set,
     load_cases,
     load_model,
     load_volume,
@@ -84,7 +85,8 @@ def main() -> None:
 
     model, _ = load_model(cfg, args.checkpoint, device)
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
-    ids, y, cache, label_names = load_cases(cfg, args.split, dataset, fold=fold)
+    cases = load_case_set(cfg, args.split, dataset, fold=fold)
+    ids, y, cache, label_names = cases.ids, cases.y, cases.cache, cases.labels
     ids, y = ids[: args.n_cases], y[: args.n_cases]
     log.info("%s/%s: %d cases", dataset, args.split, len(ids))
 
@@ -95,7 +97,7 @@ def main() -> None:
 
     rows, agreement_rows = [], []
     for case_index, pid in enumerate([] if args.only_randomization else ids):
-        volume = load_volume(cache, pid, device)
+        volume = cases.load(pid, device)
         baseline = make_baseline(volume, "blur")
         mask = bone_mask(volume)
 

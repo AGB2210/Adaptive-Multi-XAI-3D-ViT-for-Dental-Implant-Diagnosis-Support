@@ -27,6 +27,7 @@ from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble, build_method  # noqa: E402
 from src.xai.runner import (  # noqa: E402
     describe_token_geometry,
+    load_case_set,
     load_cases,
     load_model,
     load_volume,
@@ -191,10 +192,11 @@ def main() -> None:
             print("   Report this rather than proceeding as though the method works.")
 
     # ---- IG completeness ------------------------------------------------
-    ids, y, cache, _ = load_cases(cfg, "test", primary_dataset(cfg), fold=fold)
+    cases = load_case_set(cfg, "test", primary_dataset(cfg), fold=fold)
+    ids, y, cache = cases.ids, cases.y, cases.cache
     if not ids:
         raise SystemExit("no cached test cases found")
-    volume = load_volume(cache, ids[0], device)
+    volume = cases.load(ids[0], device)
     log.info("explaining case %s (%d in fold-%s test split)", ids[0], len(ids), fold)
 
     if "integrated_gradients" in methods:

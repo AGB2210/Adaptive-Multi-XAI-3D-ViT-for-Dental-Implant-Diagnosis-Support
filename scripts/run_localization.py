@@ -37,7 +37,9 @@ from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
+from src.xai.site_masks import describe_coverage, patch_masks  # noqa: E402
 from src.xai.runner import (  # noqa: E402
+    load_case_set,
     load_cases,
     load_model,
     load_volume,
@@ -68,7 +70,13 @@ def main() -> None:
                     help="pin cuDNN to deterministic kernels: ~100x slower for attribution")
     ap.add_argument("--fold", type=int, default=None,
                     help="cross-validation round; inferred from a cv_foldK checkpoint path")
-    ap.add_argument("--label", default="implant", help="which label's explanation to score")
+    ap.add_argument("--label", default=None,
+                    help="which label's explanation to score "
+                         "(site task defaults to 'feasible', otherwise 'implant')")
+    ap.add_argument("--target-value", dest="target_value", type=int, default=None,
+                    help="score cases where the label equals this "
+                         "(site task defaults to 0: sites that are NOT feasible, "
+                         "because that is the verdict the nerve explains)")
     ap.add_argument("--n-cases", dest="n_cases", type=int, default=20)
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
     ap.add_argument("--ig-steps", dest="ig_steps", type=int, default=256)
@@ -79,9 +87,16 @@ def main() -> None:
     cfg = load_config(args.config)
     labels = label_names_for(cfg)
     cfg.model.num_classes = len(labels)
-    if args.label not in labels:
-        raise SystemExit(f"--label {args.label!r} is not one of {labels}")
-    target = labels.index(args.label)
+    is_sites = bool(getattr(cfg.task, "sites_csv", None))
+
+    label = args.label or ("feasible" if is_sites else "implant")
+    if label not in labels:
+        raise SystemExit(f"--label {label!r} is not one of {labels}")
+    target = labels.index(label)
+    # On the site task the interesting verdict is the NEGATIVE one: an
+    # explanation for "not feasible" should land on whatever blocks the implant,
+    # and in the mandible that is the nerve canal 289 times out of 361.
+    want = args.target_value if args.target_value is not None else (0 if is_sites else 1)
 
     fold = resolve_fold(args.checkpoint, args.fold)
     require_prerequisites(cfg, args.checkpoint, fold=fold)
@@ -91,8 +106,9 @@ def main() -> None:
     dataset = primary_dataset(cfg)
     indices = class_index_map(cfg, labels)
     model, ckpt = load_model(cfg, args.checkpoint, device)
-    log.info("checkpoint epoch %s | scoring '%s' explanations against masks",
-             ckpt.get("epoch"), args.label)
+    log.info("checkpoint epoch %s | scoring '%s'==%d explanations against %s",
+             ckpt.get("epoch"), label, want,
+             "anatomy (nerve vs jawbone)" if is_sites else "restoration masks")
 
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     methods = build_ensemble(
@@ -102,44 +118,71 @@ def main() -> None:
         gradient_shap={"n_samples": 24, "batch_size": 4},
     )
 
-    ids, y, cache, _ = load_cases(cfg, "test", dataset, fold=fold)
-    positive = [(pid, row) for pid, row in zip(ids, y) if row[target] == 1]
-    if not positive:
-        raise SystemExit(f"no {args.label}-positive cases in the fold-{fold} test split")
-    positive = positive[: args.n_cases]
-    log.info("%d %s-positive cases in fold-%s test (scoring %d)",
-             sum(int(r[target]) for r in y), args.label, fold, len(positive))
+    cases = load_case_set(cfg, "test", dataset, fold=fold)
+    ids, y, cache = cases.ids, cases.y, cases.cache
+    selected = [(pid, row) for pid, row in zip(ids, y) if int(row[target]) == want]
+    if not selected:
+        raise SystemExit(f"no cases with {label}=={want} in the fold-{fold} test split")
+    n_available = len(selected)
+    selected = selected[: args.n_cases]
+    log.info("%d cases with %s==%d in fold-%s test (scoring %d)",
+             n_available, label, want, fold, len(selected))
 
-    others = [n for n in labels if n != args.label]
+    # WHAT THE EXPLANATION IS SCORED AGAINST.
+    #
+    # Site task: the primary structure is the inferior alveolar canal and the
+    #   competitor is the surrounding jawbone. The canal is a dark, low-contrast
+    #   tube inside bone, so an edge detector cannot find it by accident -- which
+    #   is precisely what made the old target useless. Spreading over bone
+    #   generally describes where the jaw is, not why the site fails.
+    #
+    # Detection task: the implant mask, with crown and bridge as competitors,
+    #   answering whether the model scores `implant` by detecting the
+    #   restoration sitting on top of it.
+    primary = "nerve" if is_sites else label
+    others = ["jawbone"] if is_sites else [n for n in labels if n != label]
+
     rows = []
-    for i, (pid, row) in enumerate(positive, 1):
+    for i, (case_id, _row) in enumerate(selected, 1):
+        pid = cases.patient_of(case_id)
         try:
-            masks = preprocess_mask(
-                volume_path(cfg, dataset, pid), label_path(cfg, dataset, pid), indices,
-                out_shape=tuple(cfg.preprocess.out_shape), margin=cfg.preprocess.fg_margin,
-                fit_mode=cfg.preprocess.fit_mode, target_spacing=cfg.preprocess.target_spacing,
-            )
+            if is_sites:
+                masks = patch_masks(label_path(cfg, dataset, pid), cases.row(case_id),
+                                    cases.patch_size)
+            else:
+                masks = preprocess_mask(
+                    volume_path(cfg, dataset, pid), label_path(cfg, dataset, pid), indices,
+                    out_shape=tuple(cfg.preprocess.out_shape), margin=cfg.preprocess.fg_margin,
+                    fit_mode=cfg.preprocess.fit_mode,
+                    target_spacing=cfg.preprocess.target_spacing,
+                )
         except Exception as exc:  # noqa: BLE001 - one bad mask must not lose the run
-            log.error("%s: mask failed (%s) -- skipped", pid, exc)
+            log.error("%s: mask failed (%s) -- skipped", case_id, exc)
             continue
 
-        if not masks[args.label].any():
-            # Labelled positive but nothing survives the crop and 1 mm resample.
-            log.warning("%s: %s mask is empty after preprocessing -- skipped", pid, args.label)
+        if not masks[primary].any():
+            # No canal inside this patch. Anterior mandibular sites genuinely
+            # have none, and scoring them against an empty mask would divide by
+            # a zero-size target rather than report a miss.
+            log.warning("%s: no %s in this patch -- skipped", case_id, primary)
             continue
 
-        volume = load_volume(cache, pid, device)
+        volume = cases.load(case_id, device)
+        coverage = describe_coverage(masks) if is_sites else {}
         for name, method in methods.items():
             saliency = method.attribute(volume, target)
-            scores = localization_scores(saliency, masks[args.label], k_fraction=args.topk)
-            record = {"patient_id": pid, "method": name, "label": args.label, **scores}
+            scores = localization_scores(saliency, masks[primary], k_fraction=args.topk)
+            record = {"case_id": case_id, "patient_id": pid, "method": name,
+                      "label": label, "target_value": want,
+                      "structure": primary, **scores}
+            record.update({f"coverage_{k}": v for k, v in coverage.items()})
             for other in others:
                 record[f"vs_{other}"] = competing_structure_ratio(
-                    saliency, masks[args.label], masks[other]
+                    saliency, masks[primary], masks[other]
                 )
                 record[f"present_{other}"] = bool(masks[other].any())
             rows.append(record)
-        log.info("%d/%d %s", i, len(positive), pid)
+        log.info("%d/%d %s", i, len(selected), case_id)
 
     if not rows:
         raise SystemExit("no case produced a usable mask")
@@ -150,7 +193,7 @@ def main() -> None:
     df.to_csv(out, index=False)
 
     agg = df.groupby("method").agg(
-        cases=("patient_id", "nunique"),
+        cases=("case_id", "nunique"),
         pointing_rate=("pointing_hit", "mean"),
         enrichment_median=("enrichment", "median"),
         mass_inside_median=("mass_inside", "median"),
@@ -160,8 +203,9 @@ def main() -> None:
     chance = float(df["mask_fraction"].median())
 
     print("\n" + "=" * 78)
-    print(f"LOCALISATION vs GROUND-TRUTH MASK  --  '{args.label}', fold {fold}")
-    print(f"enrichment 1.0 = chance;  the {args.label} mask is {chance:.5%} of the volume")
+    print(f"LOCALISATION vs GROUND-TRUTH ANATOMY  --  '{label}'=={want}, "
+          f"structure '{primary}', fold {fold}")
+    print(f"enrichment 1.0 = chance;  the {primary} mask is {chance:.5%} of the patch")
     print("=" * 78)
     print(agg.round(4).to_string())
 
@@ -171,8 +215,8 @@ def main() -> None:
         if sub.empty:
             continue
         print(f"\n{args.label} enrichment / {other} enrichment "
-              f"(median over {sub['patient_id'].nunique()} cases with both present)")
-        print("  > 1 means the explanation prefers the " + args.label)
+              f"(median over {sub['case_id'].nunique()} cases with both present)")
+        print("  > 1 means the explanation prefers the " + primary)
         print(sub.groupby("method")[col].median().round(3).to_string())
 
     print(f"\nwrote {out}")

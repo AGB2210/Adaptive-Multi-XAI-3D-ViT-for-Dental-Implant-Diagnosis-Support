@@ -47,6 +47,7 @@ from src.xai.calibration import (  # noqa: E402
     uncertainty,
 )
 from src.xai.runner import (  # noqa: E402
+    load_case_set,
     load_cases,
     load_model,
     load_volume,
@@ -91,7 +92,9 @@ def main() -> None:
     art = artifacts_dir(cfg)
 
     # ---- 1. calibration on VALIDATION -----------------------------------
-    val_ids, val_y, val_cache, label_names = load_cases(cfg, "val", primary_dataset(cfg), fold=fold)
+    val_cases = load_case_set(cfg, "val", primary_dataset(cfg), fold=fold)
+    val_ids, val_y, val_cache, label_names = (val_cases.ids, val_cases.y,
+                                              val_cases.cache, val_cases.labels)
     val_logits = predict_logits(model, val_cache, val_ids, device)
 
     probs_before = 1.0 / (1.0 + np.exp(-val_logits))
@@ -126,7 +129,8 @@ def main() -> None:
              gate.threshold, 100 * args.ensemble_fraction)
 
     # ---- 3. fusion on TEST ----------------------------------------------
-    ids, y, cache, _ = load_cases(cfg, "test", primary_dataset(cfg), fold=fold)
+    cases = load_case_set(cfg, "test", primary_dataset(cfg), fold=fold)
+    ids, y, cache = cases.ids, cases.y, cases.cache
     ids, y = ids[: args.n_cases], y[: args.n_cases]
     test_logits = predict_logits(model, cache, ids, device)
     test_probs = apply_temperature(test_logits, temperature)
@@ -137,7 +141,7 @@ def main() -> None:
 
     rows, per_case = [], []
     for i, pid in enumerate([] if args.from_csv else ids):
-        volume = load_volume(cache, pid, device)
+        volume = cases.load(pid, device)
         baseline = make_baseline(volume, "blur")
         target = int(np.argmax(test_probs[i]))
 
