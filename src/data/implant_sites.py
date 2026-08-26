@@ -133,6 +133,15 @@ def superior_sign(mask: np.ndarray, stats: dict | None = None) -> int:
     would have been dropped from the dataset entirely.
 
     Pairs disagreeing raises rather than taking a majority.
+
+    WHEN NOTHING RESOLVES, THIS RAISES. Measured over the full cohort, 2 of 532
+    scans carry only LowerJaw, both canals and the pharynx -- no teeth, no
+    incisive canal, no maxilla, no sinus -- and cannot be oriented from anatomy
+    at all. The pharynx was tested as a last-resort cue and measured 63-66%
+    against the jaws, so it is NOT used: a cue below 100% would silently invert
+    the superior-inferior axis on some scans and every measurement downstream
+    would follow it. Losing 0.4% of the cohort is the correct trade, and the
+    label builder records the reason rather than guessing.
     """
     if stats is None:
         stats = label_stats(mask)
