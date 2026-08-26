@@ -38,6 +38,7 @@ def load_sites(
     sites_csv: str | Path,
     targets=SITE_TARGETS,
     methods=("teeth",),
+    jaws=("lower",),
     drop_unmeasurable: bool = True,
 ) -> pd.DataFrame:
     """Read sites_*.csv and keep the rows that can honestly be trained on.
@@ -48,6 +49,20 @@ def load_sites(
     the edentulous patients get represented. That is a real trade-off between
     coverage and position accuracy, so it is a parameter rather than a decision
     buried in here.
+
+    `jaws` defaults to the mandible alone, and that is a finding rather than a
+    preference. Measured over all 522 scans, of the sites that need an implant:
+
+        mandible   637 needed, 585 measurable   (91.8%)
+        maxilla   1682 needed,  72 measurable   ( 4.3%)
+
+    After a maxillary tooth is lost the alveolar ridge resorbs and the sinus
+    pneumatises, and ToothFairy3's UpperJaw mask does not cover what remains --
+    98% of those sites have literally no bone voxels to measure. Training on
+    them would teach the model to reproduce an annotation gap as a clinical
+    verdict. The mandible loses nothing important: the inferior alveolar canal
+    is annotated in 100% of scans, and nerve clearance is the limiting factor in
+    289 of the 361 infeasible sites, which is the question worth explaining.
     """
     df = pd.read_csv(sites_csv, dtype={"patient_id": str})
     for column in ("patient_id", "tooth", "site_x", "site_y", *targets):
@@ -55,6 +70,8 @@ def load_sites(
             raise ValueError(f"{sites_csv} has no {column!r} column -- rebuild it "
                              "with scripts/build_implant_labels.py")
 
+    if jaws is not None:
+        df = df[df.jaw.isin(jaws)]
     if methods is not None:
         df = df[df.site_method.isin(methods)]
     df = df[df.site_x.notna() & df.site_y.notna()]
@@ -168,3 +185,31 @@ def group_ids(sites: pd.DataFrame) -> np.ndarray:
     their right molars in test, which reads as generalisation and is not.
     """
     return sites.patient_id.to_numpy()
+
+
+def patient_label_matrix(sites: pd.DataFrame, targets=SITE_TARGETS):
+    """Per-PATIENT summary used only to stratify the split.
+
+    The splitter balances rare label combinations across folds, and it has to
+    operate on the unit being split. That unit is the patient, so each one is
+    summarised by whether they have ANY site of each kind: a patient with an
+    infeasible site is what must be spread evenly across folds, not each of
+    their 28 rows independently.
+
+    Returns (patient_ids, matrix) aligned row for row.
+    """
+    grouped = sites.groupby("patient_id")[list(targets)].max()
+    return grouped.index.tolist(), grouped.to_numpy(dtype=np.float32)
+
+
+def sites_for_patients(sites: pd.DataFrame, patient_ids) -> pd.DataFrame:
+    """Every site row belonging to the given patients, order preserved."""
+    wanted = set(patient_ids)
+    return sites[sites.patient_id.isin(wanted)].reset_index(drop=True)
+
+
+def restrict_sites_to_cache(sites: pd.DataFrame, cache_dir) -> pd.DataFrame:
+    """Drop sites whose scan never made it through preprocessing."""
+    cache_dir = Path(cache_dir)
+    have = {p for p in set(sites.patient_id) if (cache_dir / f"{p}.npy").exists()}
+    return sites[sites.patient_id.isin(have)].reset_index(drop=True)

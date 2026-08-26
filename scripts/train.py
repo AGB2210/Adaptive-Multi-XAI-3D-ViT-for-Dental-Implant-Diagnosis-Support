@@ -25,6 +25,14 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.augment import Augment3D  # noqa: E402
+from src.data.site_dataset import (  # noqa: E402
+    SitePatchDataset,
+    load_sites,
+    patient_label_matrix,
+    restrict_sites_to_cache,
+    sites_for_patients,
+    target_matrix,
+)
 from src.data.dataset import (  # noqa: E402
     CachedVolumeDataset,
     load_label_matrix,
@@ -149,6 +157,37 @@ def make_loaders(cfg, splits, patient_ids, y, cache_dir, args):
     return loaders, matrices
 
 
+def make_site_loaders(cfg, splits, sites, cache_dir, args, targets):
+    """Loaders over tooth SITES, split by patient.
+
+    The split arrives as lists of patient ids and is expanded to their site rows
+    here. Doing it the other way round -- splitting rows -- would put a
+    patient's left molars in train and their right molars in test.
+    """
+    augment = Augment3D(cfg.augment)
+    patch = int(getattr(cfg.model, "img_size", 96))
+    loaders, matrices = {}, {}
+
+    for name in ("train", "val", "test"):
+        subset = sites_for_patients(sites, splits[name])
+        matrices[name] = (subset.patient_id.tolist(), target_matrix(subset, targets))
+        dataset = SitePatchDataset(
+            cache_dir, subset, targets=targets, patch_size=patch,
+            augment=augment if name == "train" else None, seed=cfg.seed,
+        )
+        loaders[name] = DataLoader(
+            dataset,
+            batch_size=cfg.train.batch_size,
+            shuffle=(name == "train"),
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=False,
+            worker_init_fn=worker_init_fn,
+            persistent_workers=args.num_workers > 0,
+        )
+    return loaders, matrices
+
+
 def synthetic_loaders(cfg, n_train: int = 96, n_val: int = 32):
     """Tiny in-memory synthetic task -- convergence here is a prerequisite for
     launching any real run."""
@@ -220,8 +259,23 @@ def main() -> None:
     else:
         dataset = primary_dataset(cfg)
         cache_dir = Path(cfg.data.cache_dir) / dataset
-        patient_ids, y = load_label_matrix(artifacts_dir(cfg) / f"labels_{dataset}.csv", labels)
-        patient_ids, y = restrict_to_cache(patient_ids, y, cache_dir)
+        sites_csv = getattr(cfg.task, "sites_csv", None)
+
+        if sites_csv:
+            # Per-site task: one sample per tooth position, split by patient.
+            methods = tuple(getattr(cfg.task, "site_methods", ("teeth",)))
+            jaws = tuple(getattr(cfg.task, "site_jaws", ("lower",)))
+            sites = load_sites(artifacts_dir(cfg) / sites_csv, targets=labels,
+                               methods=methods, jaws=jaws)
+            sites = restrict_sites_to_cache(sites, cache_dir)
+            patient_ids, y = patient_label_matrix(sites, labels)
+            log.info("%d sites across %d patients | jaws: %s | tiers: %s",
+                     len(sites), len(patient_ids), ", ".join(jaws), ", ".join(methods))
+        else:
+            patient_ids, y = load_label_matrix(
+                artifacts_dir(cfg) / f"labels_{dataset}.csv", labels)
+            patient_ids, y = restrict_to_cache(patient_ids, y, cache_dir)
+            sites = None
         log.info("%d patients with both labels and a cached volume", len(patient_ids))
         if not patient_ids:
             raise SystemExit("no cached volumes found -- run scripts/build_cache.py first")
@@ -234,7 +288,10 @@ def main() -> None:
             check_disjoint(splits)
             log.info("cross-validation round %d of %d: test=fold %d, val=fold %d",
                      args.fold, len(folds), args.fold, (args.fold + 1) % len(folds))
-        loaders, matrices = make_loaders(cfg, splits, patient_ids, y, cache_dir, args)
+        if sites is not None:
+            loaders, matrices = make_site_loaders(cfg, splits, sites, cache_dir, args, labels)
+        else:
+            loaders, matrices = make_loaders(cfg, splits, patient_ids, y, cache_dir, args)
         y_train = matrices["train"][1]
         for name in ("train", "val", "test"):
             log.info("%-5s n=%3d prevalence=%s", name, len(matrices[name][0]),
@@ -250,7 +307,13 @@ def main() -> None:
         print("\n" + format_metrics(metrics, labels, f"PREVALENCE BASELINE -- {name}"))
 
     # ---- model ---------------------------------------------------------
-    model = build_model(cfg.model, img_size=cfg.preprocess.out_shape[0])
+    # The site task sets model.img_size directly and leaves preprocess.out_shape
+    # null, because nothing is resampled onto a fixed grid -- patches are cut at
+    # the scan's own resolution.
+    img_size = getattr(cfg.model, "img_size", None)
+    if img_size is None:
+        img_size = cfg.preprocess.out_shape[0]
+    model = build_model(cfg.model, img_size=int(img_size))
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info("%s: %.1fM trainable parameters", cfg.model.name, n_params / 1e6)
 

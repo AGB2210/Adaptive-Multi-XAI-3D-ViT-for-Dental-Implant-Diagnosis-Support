@@ -25,6 +25,17 @@ task:
   # in the edentulous patients, who are 30.7% of missing sites and the ones who
   # most need implants. Start strict, then measure what the weaker tiers cost.
   site_methods: [teeth]
+  # MANDIBLE ONLY, and this is measured rather than preferred. Of the sites that
+  # need an implant, 91.8% are measurable in the mandible and 4.3% in the
+  # maxilla: after an upper tooth is lost the ridge resorbs, the sinus
+  # pneumatises, and ToothFairy3's UpperJaw mask does not cover the remnant, so
+  # 98% of those sites have no bone voxels at all. Training on them would teach
+  # the model to reproduce an annotation gap as a clinical verdict.
+  #
+  # Nothing important is lost. The inferior alveolar canal is annotated in every
+  # scan, and nerve clearance limits 289 of the 361 infeasible mandibular sites
+  # -- which is precisely the question an explanation should be able to answer.
+  site_jaws: [lower]
 
 preprocess:
   # NATIVE RESOLUTION. ToothFairy3 ships at 0.3 mm isotropic and nothing here

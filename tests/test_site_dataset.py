@@ -19,7 +19,7 @@ def sites_frame(rows):
     return pd.DataFrame(rows)
 
 
-BASE = dict(site_method="teeth", site_x=20.0, site_y=20.0, site_z=20.0,
+BASE = dict(site_method="teeth", jaw="lower", site_x=20.0, site_y=20.0, site_z=20.0,
             needs_implant=1.0, feasible=1.0)
 
 
@@ -32,6 +32,7 @@ def csv(tmp_path):
         {**BASE, "patient_id": "B", "tooth": 37, "site_method": "opposite_jaw"},
         {**BASE, "patient_id": "C", "tooth": 36, "feasible": np.nan},
         {**BASE, "patient_id": "C", "tooth": 37, "site_x": np.nan},
+        {**BASE, "patient_id": "D", "tooth": 16, "jaw": "upper"},
     ])
     path = tmp_path / "sites.csv"
     df.to_csv(path, index=False)
@@ -89,6 +90,19 @@ class TestLoadSites:
         our own measurement failures as clinical findings."""
         df = load_sites(csv, methods=None)
         assert "C" not in set(df.patient_id) or df[df.patient_id == "C"].feasible.notna().all()
+
+    def test_the_maxilla_is_excluded_by_default(self, csv):
+        """Measured, not preferred: of the sites that need an implant, 91.8% are
+        measurable in the mandible and 4.3% in the maxilla. After an upper tooth
+        is lost the ridge resorbs and ToothFairy3's UpperJaw mask does not cover
+        the remnant, so 98% of those sites have no bone at all. Training on them
+        would reproduce an annotation gap as a clinical verdict."""
+        df = load_sites(csv, methods=None)
+        assert set(df.jaw) == {"lower"}
+
+    def test_the_maxilla_can_be_opted_back_in(self, csv):
+        df = load_sites(csv, methods=None, jaws=("lower", "upper"))
+        assert set(df.jaw) == {"lower", "upper"}
 
     def test_a_missing_column_is_named(self, tmp_path):
         path = tmp_path / "bad.csv"
