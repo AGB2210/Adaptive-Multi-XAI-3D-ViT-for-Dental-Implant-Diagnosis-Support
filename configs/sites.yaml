@@ -53,14 +53,27 @@ model:
   # 96 voxels at 0.3 mm = 28.8 mm, more than a tooth site needs, and SMALLER
   # than the 128^3 volumes trained before.
   img_size: 96
-  # patch 8 at 0.3 mm = 2.4 mm per token, so Grad-CAM and attention rollout can
-  # resolve the nerve canal. At the previous 16-voxel patch on 1 mm data one
-  # token covered 16 mm and the canal was a third of a token; every localisation
-  # number would have been upsampling rather than evidence.
-  patch_size: 8
+  # MIND THE CONV STEM. It has stride 2, so a token covers 2 * patch_size input
+  # voxels, not patch_size. This was got wrong once: patch_size 8 was documented
+  # as 2.4 mm per token and measured at 4.8 mm, which is WIDER than the 2-3 mm
+  # nerve canal the explanations have to resolve -- the exact failure the design
+  # was meant to avoid.
+  #
+  #   patch 8 -> stem 96/2=48, 48/8 =  6^3 =  216 tokens @ 4.8 mm   too coarse
+  #   patch 4 -> stem 96/2=48, 48/4 = 12^3 = 1728 tokens @ 2.4 mm   <- this
+  #
+  # Costs ~4.7x the forward pass and actually has fewer parameters, because the
+  # patch-embedding convolution shrinks. Verify with model.grid_size rather than
+  # by arithmetic; scripts/run_xai.py prints it from the checkpoint.
+  patch_size: 4
   num_classes: 2
 
 train:
+  # Checkpoints live beside this task's other artifacts. Inheriting
+  # artifacts/runs from default.yaml would drop site checkpoints into the
+  # superseded detection task's run directory, where a later --checkpoint would
+  # silently pick up the wrong model.
+  out_dir: artifacts_sites/runs
   # Sized for a 24 GB card. 96^3 patches are 1/19th the voxels of 256^3, so this
   # fits comfortably; it is the batch the task wants, not the batch that fit on
   # a laptop.

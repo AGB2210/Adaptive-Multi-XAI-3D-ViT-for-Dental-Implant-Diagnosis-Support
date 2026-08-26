@@ -1,8 +1,8 @@
 """Derive per-site implant need and feasibility labels from ToothFairy3 masks.
 
-    python scripts/build_implant_labels.py --config configs/default.yaml
+    python scripts/build_implant_labels.py --config configs/sites.yaml
 
-Writes artifacts/sites_<dataset>.csv: one row per scan per tooth position, 28
+Writes <artifacts_dir>/sites_<dataset>.csv: one row per scan per tooth position, 28
 positions per scan (third molars excluded), so ~14,900 rows from 532 scans.
 
 WHAT EACH ROW ANSWERS
@@ -38,7 +38,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.data.dental_arch import ARCH, within_volume, site_positions  # noqa: E402
+from src.data.dental_arch import ARCH, site_positions, within_volume  # noqa: E402
 from src.data.implant_sites import (  # noqa: E402
     feasibility,
     measure_site,
@@ -185,7 +185,7 @@ def summarise(df: pd.DataFrame) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/default.yaml")
+    ap.add_argument("--config", default="configs/sites.yaml")
     ap.add_argument("--dataset", default=None, help="defaults to data.primary")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--min-height-mandible-mm", dest="min_height_mandible_mm",

@@ -48,10 +48,8 @@ from src.xai.calibration import (  # noqa: E402
 )
 from src.xai.runner import (  # noqa: E402
     load_case_set,
-    load_cases,
     load_model,
-    load_volume,
-    predict_logits,
+    predict_case_logits,
     require_prerequisites,
     resolve_fold,
     training_baselines,
@@ -93,9 +91,8 @@ def main() -> None:
 
     # ---- 1. calibration on VALIDATION -----------------------------------
     val_cases = load_case_set(cfg, "val", primary_dataset(cfg), fold=fold)
-    val_ids, val_y, val_cache, label_names = (val_cases.ids, val_cases.y,
-                                              val_cases.cache, val_cases.labels)
-    val_logits = predict_logits(model, val_cache, val_ids, device)
+    val_ids, val_y, label_names = val_cases.ids, val_cases.y, val_cases.labels
+    val_logits = predict_case_logits(model, val_cases, device)
 
     probs_before = 1.0 / (1.0 + np.exp(-val_logits))
     ece_before, bins_before = expected_calibration_error(probs_before, val_y)
@@ -130,9 +127,9 @@ def main() -> None:
 
     # ---- 3. fusion on TEST ----------------------------------------------
     cases = load_case_set(cfg, "test", primary_dataset(cfg), fold=fold)
-    ids, y, cache = cases.ids, cases.y, cases.cache
+    ids, y = cases.ids, cases.y
     ids, y = ids[: args.n_cases], y[: args.n_cases]
-    test_logits = predict_logits(model, cache, ids, device)
+    test_logits = predict_case_logits(model, cases, device)
     test_probs = apply_temperature(test_logits, temperature)
     test_uncertainty = uncertainty(test_probs, args.uncertainty)
 

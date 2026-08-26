@@ -78,8 +78,17 @@ def load_sites(
     if drop_unmeasurable:
         # A site we could not measure is missing data, not a negative finding.
         # Training on it as "not feasible" would teach the model to reproduce
-        # our own measurement failures.
+        # our own measurement failures as clinical verdicts.
+        #
+        # TWO CHECKS, NOT ONE. `feasibility()` returns feasible=False when a
+        # site is unmeasurable -- it cannot return True -- so the value written
+        # to the CSV is a plain False and a notna() test sails straight past it.
+        # Only the `reason` column distinguishes "measured, and the answer is
+        # no" from "could not measure". Missed, this silently mislabels every
+        # site where the arch fit landed off the bone.
         df = df[df[list(targets)].notna().all(axis=1)]
+        if "reason" in df.columns:
+            df = df[df.reason != "unmeasurable"]
     return df.reset_index(drop=True)
 
 

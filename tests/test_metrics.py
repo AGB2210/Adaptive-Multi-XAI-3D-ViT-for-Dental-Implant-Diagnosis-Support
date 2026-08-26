@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.train.metrics import (
     auroc,
@@ -109,3 +110,73 @@ def test_evaluate_with_bootstrap_adds_intervals():
         lo, hi = out["per_label"][name]["auroc_ci"]
         assert lo <= out["per_label"][name]["auroc"] <= hi
     assert "macro_auroc_ci" in out
+
+
+class TestNoInformationFloor:
+    """A loss means nothing without the floor, and the floor moves with the
+    label set. Part B's three-label floor was 1.0652; quoting it against the
+    two-label site task would be a category error."""
+
+    def test_balanced_weights_put_the_optimum_at_logit_zero(self):
+        from src.train.metrics import no_information_bce
+
+        y = np.zeros((100, 1), dtype=np.float32)
+        y[:20] = 1.0                       # prevalence 0.2
+        w = np.array([(1 - 0.2) / 0.2])    # the exact balancing weight
+        out = no_information_bce(y, w)
+        assert out["optimal_logits"][0] == pytest.approx(0.0, abs=1e-9)
+        # loss at logit 0 is log(2) per contributing term
+        assert out["floor"] == pytest.approx(2 * np.log(2) * 0.8, rel=1e-9)
+
+    def test_unweighted_floor_is_the_entropy_of_the_prevalence(self):
+        from src.train.metrics import no_information_bce
+
+        y = np.zeros((100, 1), dtype=np.float32)
+        y[:30] = 1.0
+        out = no_information_bce(y)
+        p = 0.3
+        expected = -(p * np.log(p) + (1 - p) * np.log(1 - p))
+        assert out["floor"] == pytest.approx(expected, rel=1e-9)
+
+    def test_clamped_weights_move_the_optimum_off_zero(self):
+        """pos_weight is clamped in this project, so the optimum is solved for
+        rather than assumed to sit at logit 0."""
+        from src.train.metrics import no_information_bce
+
+        y = np.zeros((1000, 1), dtype=np.float32)
+        y[:10] = 1.0                        # prevalence 0.01, true weight 99
+        out = no_information_bce(y, np.array([10.0]))   # clamped
+        assert out["optimal_logits"][0] < 0.0
+
+    def test_a_constant_model_cannot_beat_the_floor(self):
+        """The definition: no constant prediction scores lower."""
+        from src.train.metrics import no_information_bce
+
+        rng = np.random.default_rng(0)
+        y = (rng.random((500, 2)) < np.array([0.2, 0.05])).astype(np.float32)
+        w = np.array([4.0, 10.0])
+        floor = no_information_bce(y, w)["floor"]
+
+        softplus = lambda t: np.logaddexp(0.0, t)  # noqa: E731
+        for z in np.linspace(-4, 4, 81):
+            loss = np.mean([
+                w[j] * y[:, j].mean() * softplus(-z) + (1 - y[:, j].mean()) * softplus(z)
+                for j in range(2)
+            ])
+            assert loss >= floor - 1e-9
+
+    def test_an_empty_label_is_zero_not_nan(self):
+        from src.train.metrics import no_information_bce
+
+        y = np.zeros((50, 2), dtype=np.float32)
+        y[:10, 0] = 1.0
+        out = no_information_bce(y)
+        assert np.isfinite(out["floor"])
+        assert out["per_label"][1] == 0.0
+
+    def test_reports_prevalence_alongside(self):
+        from src.train.metrics import no_information_bce
+
+        y = np.zeros((10, 2), dtype=np.float32)
+        y[:5, 0] = 1.0
+        assert no_information_bce(y)["prevalence"] == pytest.approx([0.5, 0.0])

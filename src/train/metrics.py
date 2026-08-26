@@ -214,3 +214,54 @@ def format_metrics(metrics: dict, label_names: list[str], title: str = "") -> st
     macro += f"{metrics['macro_ap']:>8.3f}{metrics['macro_f1']:>8.3f}"
     lines += ["-" * len(header), macro]
     return "\n".join(lines)
+
+
+def no_information_bce(y: np.ndarray, pos_weight=None) -> dict:
+    """Loss of a model that has learned nothing. Report it beside every loss.
+
+    A training loss is uninterpretable on its own: whether 2.70 is progress or
+    noise depends entirely on where chance sits, and chance moves with the label
+    set. Part B's three-label floor was 1.0652; quoting it against a two-label
+    task would be a category error.
+
+    The floor is the loss of the best CONSTANT prediction -- a model that ignores
+    the image entirely. For label j with prevalence p and pos_weight w, the
+    optimal constant logit is log(w*p / (1-p)); with the exact balancing weight
+    w = (1-p)/p that is logit 0, but pos_weight is clamped in this project, so
+    the optimum is solved for rather than assumed.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    if y.ndim == 1:
+        y = y[:, None]
+    n_labels = y.shape[1]
+
+    if pos_weight is None:
+        weights = np.ones(n_labels)
+    else:
+        weights = np.asarray(
+            pos_weight.detach().cpu().numpy() if hasattr(pos_weight, "detach") else pos_weight,
+            dtype=np.float64,
+        ).reshape(-1)
+        if weights.size == 1:
+            weights = np.repeat(weights, n_labels)
+
+    softplus = lambda t: np.logaddexp(0.0, t)  # noqa: E731
+    per_label, logits = [], []
+    for j in range(n_labels):
+        p, w = float(y[:, j].mean()), float(weights[j])
+        if p <= 0.0 or p >= 1.0:
+            # A label with no positives (or no negatives) has a degenerate
+            # optimum: the constant model is perfect and the floor is zero.
+            per_label.append(0.0)
+            logits.append(float("-inf") if p <= 0.0 else float("inf"))
+            continue
+        z = float(np.log(w * p / (1.0 - p)))
+        per_label.append(float(w * p * softplus(-z) + (1.0 - p) * softplus(z)))
+        logits.append(z)
+
+    return {
+        "floor": float(np.mean(per_label)),
+        "per_label": per_label,
+        "optimal_logits": logits,
+        "prevalence": y.mean(axis=0).tolist(),
+    }

@@ -38,9 +38,7 @@ from src.xai.faithfulness import (  # noqa: E402
 )
 from src.xai.runner import (  # noqa: E402
     load_case_set,
-    load_cases,
     load_model,
-    load_volume,
     require_prerequisites,
     resolve_fold,
     training_baselines,
@@ -86,7 +84,7 @@ def main() -> None:
     model, _ = load_model(cfg, args.checkpoint, device)
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     cases = load_case_set(cfg, args.split, dataset, fold=fold)
-    ids, y, cache, label_names = cases.ids, cases.y, cases.cache, cases.labels
+    ids, y, label_names = cases.ids, cases.y, cases.labels
     ids, y = ids[: args.n_cases], y[: args.n_cases]
     log.info("%s/%s: %d cases", dataset, args.split, len(ids))
 
@@ -179,7 +177,7 @@ def main() -> None:
     randomization = {}
     rand_rows = []
     for pid in ids[: args.rand_cases]:
-        volume = load_volume(cache, pid, device)
+        volume = cases.load(pid, device)
         with torch.no_grad():
             target = int(np.argmax(torch.sigmoid(model(volume))[0].cpu().numpy()))
 
@@ -232,12 +230,27 @@ def main() -> None:
             print("   rather than nullifying them before reading this as a pass:")
             print(f"   {undefined.index.tolist()}")
 
-        suspicious = final[final[col].abs() > 0.5].index.tolist()
-        if suspicious:
+        # Two different failures, and calling both "barely changed" misreports
+        # one of them. A map still correlated with the intact one is tracking
+        # the image rather than the weights. A map that has INVERTED is not
+        # unchanged -- but a stable anti-correlation is still structural
+        # dependence on the input, not the decorrelation this check looks for.
+        stuck = final[final[col] > 0.5].index.tolist()
+        flipped = final[final[col] < -0.5].index.tolist()
+
+        if stuck:
             print()
-            print(f"!! {suspicious} barely change under FULL randomisation")
-            print(f"   (|rho| > 0.5 at {last_stage!r}). That is the edge-detector")
-            print("   signature. Report it explicitly.")
+            print(f"!! {stuck} barely change under FULL randomisation")
+            print(f"   (rho > 0.5 at {last_stage!r}). That is the edge-detector")
+            print("   signature: the same map from a trained and a random network.")
+        if flipped:
+            print()
+            print(f"!! {flipped} INVERT rather than decorrelate")
+            print(f"   (rho < -0.5 at {last_stage!r}). Not unchanged, but a stable")
+            print("   anti-correlation is still structure carried from the input.")
+        if not stuck and not flipped:
+            print()
+            print(f"all methods decorrelated (|rho| <= 0.5 at {last_stage!r}).")
 
 
     print(f"\nwrote {art / 'results_faithfulness.csv'}, {art / 'results_agreement.csv'}, "

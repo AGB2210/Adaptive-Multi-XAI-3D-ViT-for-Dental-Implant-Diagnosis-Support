@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import nibabel as nib
 import numpy as np
-import pytest
 
 from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
 from src.xai.site_masks import SITE_STRUCTURES, describe_coverage, patch_masks

@@ -20,7 +20,7 @@ def sites_frame(rows):
 
 
 BASE = dict(site_method="teeth", jaw="lower", site_x=20.0, site_y=20.0, site_z=20.0,
-            needs_implant=1.0, feasible=1.0)
+            needs_implant=1.0, feasible=1.0, reason="ok")
 
 
 @pytest.fixture
@@ -33,6 +33,8 @@ def csv(tmp_path):
         {**BASE, "patient_id": "C", "tooth": 36, "feasible": np.nan},
         {**BASE, "patient_id": "C", "tooth": 37, "site_x": np.nan},
         {**BASE, "patient_id": "D", "tooth": 16, "jaw": "upper"},
+        {**BASE, "patient_id": "E", "tooth": 35, "feasible": 0.0,
+         "reason": "unmeasurable"},
     ])
     path = tmp_path / "sites.csv"
     df.to_csv(path, index=False)
@@ -103,6 +105,19 @@ class TestLoadSites:
     def test_the_maxilla_can_be_opted_back_in(self, csv):
         df = load_sites(csv, methods=None, jaws=("lower", "upper"))
         assert set(df.jaw) == {"lower", "upper"}
+
+    def test_an_unmeasurable_site_is_dropped_even_though_its_target_is_not_nan(self, csv):
+        """The trap: feasibility() returns feasible=False when a site cannot be
+        measured -- it cannot return True -- so a notna() test sails past it and
+        the model learns our measurement failures as clinical verdicts. Only the
+        `reason` column tells the two apart."""
+        df = load_sites(csv, methods=None)
+        assert "E" not in set(df.patient_id)
+        assert (df.reason != "unmeasurable").all()
+
+    def test_unmeasurable_rows_survive_when_the_caller_opts_out(self, csv):
+        df = load_sites(csv, methods=None, drop_unmeasurable=False)
+        assert "E" in set(df.patient_id)
 
     def test_a_missing_column_is_named(self, tmp_path):
         path = tmp_path / "bad.csv"

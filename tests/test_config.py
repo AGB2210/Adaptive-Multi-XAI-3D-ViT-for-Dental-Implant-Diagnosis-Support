@@ -175,3 +175,43 @@ class TestStaleCache:
         text = (tmp_path / build_cache.SETTINGS).read_text(encoding="utf-8")
         assert list(json.loads(text)) == ["a", "b"]
         assert json.loads(text)["a"] == [1, 2]
+
+
+class TestArtifactIsolation:
+    """Every shipped config must keep its outputs to itself.
+
+    The bug this guards: configs/sites.yaml overrode data.artifacts_dir but
+    inherited train.out_dir from default.yaml, so site checkpoints were written
+    into the superseded detection task's run directory. A later --checkpoint
+    would then silently load a model trained on a different task with a
+    different number of outputs.
+    """
+
+    CONFIGS = ("configs/default.yaml", "configs/sites.yaml", "configs/preprocess_256.yaml")
+
+    @pytest.mark.parametrize("path", CONFIGS)
+    def test_run_dir_sits_under_the_artifacts_dir(self, path):
+        from pathlib import Path
+
+        cfg = load_config(path)
+        art = Path(str(cfg.data.artifacts_dir)).as_posix().rstrip("/")
+        out = Path(str(cfg.train.out_dir)).as_posix()
+        assert out.startswith(art + "/"), (
+            f"{path}: train.out_dir {out!r} is outside data.artifacts_dir {art!r} -- "
+            "checkpoints would land in another task's directory"
+        )
+
+    @pytest.mark.parametrize("path", CONFIGS)
+    def test_cache_dir_sits_under_the_artifacts_dir(self, path):
+        from pathlib import Path
+
+        cfg = load_config(path)
+        art = Path(str(cfg.data.artifacts_dir)).as_posix().rstrip("/")
+        cache = Path(str(cfg.data.cache_dir)).as_posix()
+        assert cache.startswith(art + "/"), f"{path}: cache_dir escapes artifacts_dir"
+
+    def test_the_three_configs_do_not_share_an_artifacts_dir(self):
+        """Two tasks writing to one directory means one silently overwrites the
+        other's labels, splits and checkpoints."""
+        dirs = [str(load_config(p).data.artifacts_dir) for p in self.CONFIGS]
+        assert len(set(dirs)) == len(dirs), f"configs share an artifacts dir: {dirs}"

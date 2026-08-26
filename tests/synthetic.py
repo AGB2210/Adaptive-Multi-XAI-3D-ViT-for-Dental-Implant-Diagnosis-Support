@@ -103,9 +103,21 @@ def make_dataset(
     n: int,
     seed: int = 0,
     shape: tuple[int, int, int] = (32, 32, 32),
+    n_labels: int = 6,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """A small stack of cases. Default shape is tiny -- these are for unit tests."""
-    vols, ys = zip(*(make_case(seed + i, shape=shape) for i in range(n)))
+    """A small stack of cases. Default shape is tiny -- these are for unit tests.
+
+    `n_labels` must match the task being gated. It used to be fixed at six, so
+    running the gate on a two-output config produced (n, 6) targets against a
+    two-class model and failed inside the prevalence baseline -- an unhelpful
+    place to learn that the gate does not know what it is gating.
+    """
+    if not 1 <= n_labels <= len(SIGNAL_SITES):
+        raise ValueError(
+            f"n_labels must be between 1 and {len(SIGNAL_SITES)} "
+            f"(one planted site per label), got {n_labels}"
+        )
+    vols, ys = zip(*(make_case(seed + i, shape=shape, n_labels=n_labels) for i in range(n)))
     return np.stack(vols)[:, None], np.stack(ys)
 
 

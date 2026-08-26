@@ -1,0 +1,31 @@
+extends: sites.yaml
+
+# ===========================================================================
+# The same task, shrunk until it runs on a laptop. NOT a research setting.
+#
+# Its only job is to prove the pipeline executes end to end before anyone rents
+# a GPU: labels load, patches cut, the model trains, all five XAI stages run,
+# figures render. Every one of those had passing unit tests while the pipeline
+# itself was broken, so this is the gate that actually catches integration
+# faults.
+#
+#   python scripts/build_site_cache.py --config configs/sites_smoke.yaml --limit 14
+#   python scripts/train.py            --config configs/sites_smoke.yaml --synthetic
+#   python scripts/train.py            --config configs/sites_smoke.yaml --num-workers 0
+#   python scripts/run_xai.py          --config configs/sites_smoke.yaml --checkpoint ...
+#   python scripts/run_faithfulness.py --config configs/sites_smoke.yaml --checkpoint ...
+#   python scripts/run_localization.py --config configs/sites_smoke.yaml --checkpoint ...
+#   python scripts/run_adaptive.py     --config configs/sites_smoke.yaml --checkpoint ...
+#   python scripts/make_figures.py     --config configs/sites_smoke.yaml --checkpoint ...
+#
+# NOTHING MEASURED UNDER THIS CONFIG IS A RESULT. A model trained for one epoch
+# on a handful of scans predicts near-constant, so its deletion and insertion
+# curves are flat and its enrichment numbers are noise. Read the exit codes, not
+# the tables.
+# ===========================================================================
+
+train:
+  # 4 GB laptop card. configs/sites.yaml uses 64, which will not fit here.
+  batch_size: 2
+  accum_steps: 1
+  epochs: 1

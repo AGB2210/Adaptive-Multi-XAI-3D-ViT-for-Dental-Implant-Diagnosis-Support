@@ -25,6 +25,12 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.augment import Augment3D  # noqa: E402
+from src.data.dataset import (  # noqa: E402
+    CachedVolumeDataset,
+    load_label_matrix,
+    pos_weight_from_labels,
+    restrict_to_cache,
+)
 from src.data.site_dataset import (  # noqa: E402
     SitePatchDataset,
     load_sites,
@@ -32,12 +38,6 @@ from src.data.site_dataset import (  # noqa: E402
     restrict_sites_to_cache,
     sites_for_patients,
     target_matrix,
-)
-from src.data.dataset import (  # noqa: E402
-    CachedVolumeDataset,
-    load_label_matrix,
-    pos_weight_from_labels,
-    restrict_to_cache,
 )
 from src.data.splits import (  # noqa: E402
     check_disjoint,
@@ -53,13 +53,13 @@ from src.data.splits import (  # noqa: E402
 )
 from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
 from src.models import build_model
-from src.xai.runner import model_img_size  # noqa: E402
 from src.models.prevalence import PrevalenceBaseline  # noqa: E402
 from src.train.loop import Trainer, predict  # noqa: E402
-from src.train.metrics import evaluate, format_metrics  # noqa: E402
+from src.train.metrics import evaluate, format_metrics, no_information_bce  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed, worker_init_fn  # noqa: E402
+from src.xai.runner import model_img_size  # noqa: E402
 
 log = get_logger("train_script")
 
@@ -194,9 +194,12 @@ def synthetic_loaders(cfg, n_train: int = 96, n_val: int = 32):
     launching any real run."""
     from tests.synthetic import make_dataset
 
-    shape = tuple(cfg.preprocess.out_shape)
-    xtr, ytr = make_dataset(n_train, seed=0, shape=shape)
-    xva, yva = make_dataset(n_val, seed=10_000, shape=shape)
+    # The gate must build volumes the model can actually take, and the site
+    # task has no fixed preprocessing grid to read that from.
+    shape = (model_img_size(cfg),) * 3
+    n_labels = len(label_names_for(cfg))
+    xtr, ytr = make_dataset(n_train, seed=0, shape=shape, n_labels=n_labels)
+    xva, yva = make_dataset(n_val, seed=10_000, shape=shape, n_labels=n_labels)
 
     def loader(x, y, shuffle):
         ds = TensorDataset(torch.from_numpy(x).float(), torch.from_numpy(y).float())
@@ -299,6 +302,21 @@ def main() -> None:
                      np.round(matrices[name][1].mean(axis=0), 3).tolist())
 
     # ---- prevalence baseline (free, always reported) --------------------
+    # The no-information floor: the loss of a model that ignores the image.
+    # Printed before training because a loss is uninterpretable without it, and
+    # because the floor moves with the label set -- the previous three-label
+    # task's floor was 1.0652 and quoting it here would be a category error.
+    pos_weight = pos_weight_from_labels(y_train)
+    floor = no_information_bce(y_train, pos_weight)
+    print()
+    print("=" * 62)
+    print("NO-INFORMATION FLOOR -- train")
+    print("=" * 62)
+    for name, f, prev in zip(labels, floor["per_label"], floor["prevalence"]):
+        print(f"  {name:<22} floor {f:6.4f}   prevalence {prev:6.4f}")
+    print(f"  {'MACRO':<22} floor {floor['floor']:6.4f}")
+    print("  a training loss at or above this has learned nothing")
+
     baseline = PrevalenceBaseline(len(labels)).fit(y_train)
     for name in ("val", "test"):
         if name not in matrices:
@@ -319,7 +337,7 @@ def main() -> None:
         model,
         cfg,
         labels,
-        pos_weight=pos_weight_from_labels(y_train),
+        pos_weight=pos_weight,
         device=device,
         out_dir=out_dir,
     )

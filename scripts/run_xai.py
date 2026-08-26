@@ -28,9 +28,8 @@ from src.xai import ENSEMBLE_METHODS, build_ensemble, build_method  # noqa: E402
 from src.xai.runner import (  # noqa: E402
     describe_token_geometry,
     load_case_set,
-    load_cases,
     load_model,
-    load_volume,
+    model_img_size,
     require_prerequisites,
     resolve_fold,
     training_baselines,
@@ -177,7 +176,7 @@ def main() -> None:
         # different out_shape would reject a hardcoded 128^3 volume.
         sanity = synthetic_sanity(model, device, methods, label_names,
                                   args.sanity_cases, cfg.seed,
-                                  shape=tuple(cfg.preprocess.out_shape))
+                                  shape=(model_img_size(cfg),) * 3)
         sanity.to_csv(art / "xai_sanity.csv", index=False)
 
         summary = sanity.groupby("method")["enrichment"].agg(["mean", "std", "min"])
@@ -193,7 +192,7 @@ def main() -> None:
 
     # ---- IG completeness ------------------------------------------------
     cases = load_case_set(cfg, "test", primary_dataset(cfg), fold=fold)
-    ids, y, cache = cases.ids, cases.y, cases.cache
+    ids = cases.ids
     if not ids:
         raise SystemExit("no cached test cases found")
     volume = cases.load(ids[0], device)

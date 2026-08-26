@@ -37,16 +37,14 @@ from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
-from src.xai.site_masks import describe_coverage, patch_masks  # noqa: E402
 from src.xai.runner import (  # noqa: E402
     load_case_set,
-    load_cases,
     load_model,
-    load_volume,
     require_prerequisites,
     resolve_fold,
     training_baselines,
 )
+from src.xai.site_masks import describe_coverage, patch_masks  # noqa: E402
 
 log = get_logger("localization")
 
@@ -104,7 +102,10 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     dataset = primary_dataset(cfg)
-    indices = class_index_map(cfg, labels)
+    # Only the detection path maps label names onto mask class indices. The
+    # site task's labels are verdicts, not structures, and its anatomy comes
+    # from src/xai/site_masks.py instead.
+    indices = None if is_sites else class_index_map(cfg, labels)
     model, ckpt = load_model(cfg, args.checkpoint, device)
     log.info("checkpoint epoch %s | scoring '%s'==%d explanations against %s",
              ckpt.get("epoch"), label, want,
@@ -119,7 +120,7 @@ def main() -> None:
     )
 
     cases = load_case_set(cfg, "test", dataset, fold=fold)
-    ids, y, cache = cases.ids, cases.y, cases.cache
+    ids, y = cases.ids, cases.y
     selected = [(pid, row) for pid, row in zip(ids, y) if int(row[target]) == want]
     if not selected:
         raise SystemExit(f"no cases with {label}=={want} in the fold-{fold} test split")
@@ -214,7 +215,7 @@ def main() -> None:
         sub = df[present & np.isfinite(df[col])]
         if sub.empty:
             continue
-        print(f"\n{args.label} enrichment / {other} enrichment "
+        print(f"\n{primary} enrichment / {other} enrichment "
               f"(median over {sub['case_id'].nunique()} cases with both present)")
         print("  > 1 means the explanation prefers the " + primary)
         print(sub.groupby("method")[col].median().round(3).to_string())

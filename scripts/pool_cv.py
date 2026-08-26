@@ -45,6 +45,7 @@ from src.train.metrics import evaluate, format_metrics  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
+from src.xai.runner import model_img_size  # noqa: E402
 
 log = get_logger("pool_cv")
 

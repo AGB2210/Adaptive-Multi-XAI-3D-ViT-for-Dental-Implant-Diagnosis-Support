@@ -39,6 +39,10 @@ preprocess:
   workers: 3                          # 33.5 MB per volume -- fewer workers, more RAM each
 
 train:
+  # Checkpoints stay with this build's own artifacts. Inheriting artifacts/runs
+  # would have written 256^3 checkpoints over the 128^3 ones, and --checkpoint
+  # would then load a model built for a different input size.
+  out_dir: artifacts_256/runs
   # 8x the voxels. 4 GB of VRAM does not fit batch 4 at this resolution; batch 1
   # with accum_steps 4 keeps the EFFECTIVE batch at 4, so lr stays 3.0e-5 and the
   # comparison against the 1 mm result stays honest. Raising the batch size on a

@@ -34,10 +34,8 @@ from src.xai.base import make_baseline  # noqa: E402
 from src.xai.calibration import apply_temperature  # noqa: E402
 from src.xai.runner import (  # noqa: E402
     load_case_set,
-    load_cases,
     load_model,
-    load_volume,
-    predict_logits,
+    predict_case_logits,
     require_prerequisites,
     resolve_fold,
     training_baselines,
@@ -100,8 +98,8 @@ def main() -> None:
 
     primary = primary_dataset(cfg)
     cases = load_case_set(cfg, "test", primary, fold=fold)
-    ids, y, cache, label_names = cases.ids, cases.y, cases.cache, cases.labels
-    logits = predict_logits(model, cache, ids, device)
+    ids, y, label_names = cases.ids, cases.y, cases.labels
+    logits = predict_case_logits(model, cases, device)
 
     calib_path = art / "calibration" / "calibration.json"
     temperature = 1.0
@@ -115,7 +113,8 @@ def main() -> None:
     # Auxiliary columns are optional context for case selection -- computed by the
     # label builder but never trained on. Whatever extra columns the cohort's CSV
     # carries beyond the trained labels are used; a cohort with none still works.
-    aux = pd.read_csv(art / f"labels_{primary}.csv", dtype={"patient_id": str})
+    aux_csv = art / (getattr(cfg.task, "sites_csv", None) or f"labels_{primary}.csv")
+    aux = pd.read_csv(aux_csv, dtype={"patient_id": str})
     aux = aux[[c for c in aux.columns
                if c == "patient_id" or (c not in label_names and not c.startswith("ev_"))]]
 
@@ -143,8 +142,10 @@ def main() -> None:
 
             predicted = [label_names[j] for j in range(len(label_names)) if probs[i, j] >= 0.5]
             truth = [label_names[j] for j in range(len(label_names)) if y[i, j] == 1]
+            # A case on the site task is a tooth position, not a whole patient.
+            unit = "site" if cases.is_sites else "patient"
             title = (
-                f"{group.replace('_', ' ')} — patient {pid} — explaining '{label_names[target]}'\n"
+                f"{group.replace('_', ' ')} — {unit} {pid} — explaining '{label_names[target]}'\n"
                 f"predicted: {', '.join(predicted) or 'none'}  |  true: {', '.join(truth) or 'none'}\n"
                 f"calibrated p={probs[i, target]:.3f}   column headers show {EVAL_METRIC} (lower is better)"
             )

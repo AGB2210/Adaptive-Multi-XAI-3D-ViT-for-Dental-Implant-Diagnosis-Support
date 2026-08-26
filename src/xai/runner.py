@@ -15,9 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch
-
 import pandas as pd
+import torch
 
 from src.data.dataset import load_label_matrix, restrict_to_cache
 from src.data.site_dataset import (
