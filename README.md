@@ -25,9 +25,10 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Stage | State |
 |---|---|
 | Label builder, arch fitting, site measurement | **Done** — validated against real anatomy |
-| Site labels built | **Done** — 6,990 mandibular sites, 503 patients |
+| Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
 | Native-resolution cache, patch dataset, training wiring | **Done** |
-| 292 tests | **Green** |
+| Pipeline run end to end on real scans | **Done** — all five XAI stages |
+| 319 tests | **Green**, ruff clean |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **Not started** — needs a rented GPU |
 | Guide sign-off on clinical thresholds | **Pending** |
@@ -71,12 +72,25 @@ broken rather than the problem being hard.
 |---|---|---|---|
 | 128³ @ 1.0 mm | 3.3× blurred | whole head | 532 |
 | 256³ @ 0.5 mm | 1.7× blurred | whole head | 532 |
-| **96³ @ 0.3 mm** | **native** | one tooth site | **~7,000** |
+| **96³ @ 0.3 mm** | **native** | one tooth site | **6,787** |
 
 The patch is sharper *and* 19× smaller than the 256³ volume. The structure the
 model must respect is the inferior alveolar canal, 2–3 mm across: at 1.0 mm that
 is two or three voxels, and no attribution method can point at something it
-cannot resolve. At patch size 8 on native data, one token covers 2.4 mm.
+cannot resolve.
+
+**Mind the conv stem.** It has stride 2, so a token spans `2 × patch_size` input
+voxels, not `patch_size`. This was got wrong once — `patch_size: 8` was
+documented as 2.4 mm per token and measured at **4.8 mm**, wider than the nerve
+itself:
+
+| | tokens | mm per token |
+|---|---|---|
+| patch 8 | 6³ = 216 | 4.8 mm — too coarse |
+| **patch 4** | **12³ = 1,728** | **2.4 mm** ✓ |
+
+Check `model.grid_size` rather than doing the arithmetic; `run_xai.py` prints it
+from the checkpoint.
 
 ## Mandible only
 
@@ -96,6 +110,33 @@ Nothing important is lost: the inferior alveolar canal is annotated in **every**
 scan, and nerve clearance limits 289 of the 361 infeasible sites — which is both
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
+
+## The three numbers to quote a result against
+
+```
+BCE floor    1.2026     loss of a model that has learned nothing
+AUROC floor  0.500
+AP floor     0.0952     = mean prevalence
+```
+
+`train.py` prints the floor before the first epoch. **It moves with the label
+set** — the superseded three-label task's floor was 1.0652, and quoting it here
+would be a category error.
+
+## Before renting a GPU, run the smoke config
+
+```bash
+python scripts/build_site_cache.py --config configs/sites_smoke.yaml --limit 14
+python scripts/train.py            --config configs/sites_smoke.yaml --synthetic
+python scripts/train.py            --config configs/sites_smoke.yaml --num-workers 0
+python scripts/run_xai.py          --config configs/sites_smoke.yaml --checkpoint artifacts_sites/runs/vit3d/best.pt
+```
+
+It shrinks the task until it runs on a 4 GB laptop. Nine integration faults were
+found this way, none of which a unit test caught, because they all lived in the
+seams between components. **Nothing measured under it is a result** — a
+one-epoch model predicts near-constant, so its curves are flat. Read the exit
+codes, not the tables.
 
 ## From scratch, deliberately
 
