@@ -28,7 +28,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
 | Native-resolution cache, patch dataset, training wiring | **Done** |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
-| 319 tests | **Green**, ruff clean |
+| 323 tests | **Green**, ruff clean |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **Not started** — needs a rented GPU |
 | Guide sign-off on clinical thresholds | **Pending** |
@@ -132,9 +132,10 @@ python scripts/train.py            --config configs/sites_smoke.yaml --num-worke
 python scripts/run_xai.py          --config configs/sites_smoke.yaml --checkpoint artifacts_sites/runs/vit3d/best.pt
 ```
 
-It shrinks the task until it runs on a 4 GB laptop. Nine integration faults were
-found this way, none of which a unit test caught, because they all lived in the
-seams between components. **Nothing measured under it is a result** — a
+It shrinks the task until it runs on a 4 GB laptop. **Thirteen** integration
+faults were found this way, none of which a unit test caught, because they all
+lived in the seams between components — including one that would have silently
+reduced a five-fold cross-validation to a single checkpoint. **Nothing measured under it is a result** — a
 one-epoch model predicts near-constant, so its curves are flat. Read the exit
 codes, not the tables.
 
