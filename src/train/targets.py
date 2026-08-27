@@ -1,0 +1,325 @@
+"""Mixed binary and millimetre targets, and the loss and metrics that go with them.
+
+WHY THE MILLIMETRES ARE THE TARGET
+----------------------------------
+`feasible` used to be a label. It is not an observation -- it is a rule applied
+to two measurements:
+
+    feasible = available_height_mm >= 12.0 and ridge_width_mm >= 6.0
+
+Training on it compiles 12.0 into the weights. That matters more than it sounds,
+because the threshold is the single largest lever in the project. Measured on the
+mandibular teeth-tier cohort, over the 709 sites that need an implant:
+
+    height rule 10 mm -> 266 infeasible (37.5%)
+    height rule 12 mm -> 390 infeasible (55.0%)
+    height rule 14 mm -> 503 infeasible (70.9%)
+
+A 2 mm revision moves a third of the answers. As a classifier that revision costs
+five folds of retraining; predicting millimetres, it costs a re-score. This is the
+project's own stated principle -- thresholds are configuration, never code --
+applied to the model rather than only to the label builder.
+
+It is also the more useful output. "14.3 mm of bone here" tells a clinician which
+fixture to use. "No" does not, and it silently assumes a 10 mm fixture, which is
+one of the softer assumptions in the whole pipeline.
+
+WHY IT IS A MIX AND NOT A CLEAN SWITCH
+--------------------------------------
+`needs_implant` is occupancy -- is this socket empty -- and is genuinely binary.
+There is no millimetre quantity underneath it, so it stays a classification head.
+Expect it to be easy: "is there a tooth in this patch" is a simple visual task,
+and a high AUROC on it is a sanity check rather than a finding. The contribution
+is the feasibility half.
+
+STANDARDISATION
+---------------
+The millimetre heads are trained on standardised targets. Height has sd 8.0 mm
+and width 4.4 mm, so on raw millimetres height contributes ~3x the gradient of
+width for the same relative error, and the two heads stop being comparable. The
+scaler is fitted on the TRAINING split only and travels in the checkpoint;
+predictions are converted back to millimetres before any metric is computed, so
+every reported number is in millimetres regardless.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+import torch
+from torch import nn
+
+
+@dataclass
+class TargetSpec:
+    """Which output column is what, and how to get millimetres back.
+
+    Binary columns come first, then millimetre columns. Order is fixed by the
+    config and carried in the checkpoint, because a model whose head order does
+    not match the evaluator's silently reports one target's score under another's
+    name.
+    """
+
+    binary: list[str] = field(default_factory=list)
+    millimetres: list[str] = field(default_factory=list)
+    mean: np.ndarray | None = None       # per mm-target, training split
+    std: np.ndarray | None = None
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.binary) + list(self.millimetres)
+
+    @property
+    def n_outputs(self) -> int:
+        return len(self.binary) + len(self.millimetres)
+
+    @property
+    def is_hybrid(self) -> bool:
+        return bool(self.millimetres)
+
+    def slice_binary(self, a):
+        return a[..., : len(self.binary)]
+
+    def slice_mm(self, a):
+        return a[..., len(self.binary):]
+
+    def fit(self, y: np.ndarray) -> "TargetSpec":
+        """Fit the standardiser on the training split, ignoring NaN."""
+        if not self.millimetres:
+            return self
+        mm = np.asarray(self.slice_mm(y), dtype=np.float64)
+        self.mean = np.nanmean(mm, axis=0)
+        std = np.nanstd(mm, axis=0)
+        # A constant column would divide by zero and make the head untrainable;
+        # 1.0 leaves it in raw millimetres, which is the honest fallback.
+        self.std = np.where(std > 1e-6, std, 1.0)
+        return self
+
+    def standardise(self, y: np.ndarray) -> np.ndarray:
+        if not self.millimetres or self.mean is None:
+            return y
+        out = np.array(y, dtype=np.float32, copy=True)
+        out[..., len(self.binary):] = (self.slice_mm(out) - self.mean) / self.std
+        return out
+
+    def to_millimetres(self, pred: np.ndarray) -> np.ndarray:
+        """Undo standardisation. Every metric is computed after this."""
+        if not self.millimetres or self.mean is None:
+            return pred
+        out = np.array(pred, dtype=np.float32, copy=True)
+        out[..., len(self.binary):] = self.slice_mm(out) * self.std + self.mean
+        return out
+
+    def state_dict(self) -> dict:
+        return {
+            "binary": list(self.binary),
+            "millimetres": list(self.millimetres),
+            "mean": None if self.mean is None else np.asarray(self.mean).tolist(),
+            "std": None if self.std is None else np.asarray(self.std).tolist(),
+        }
+
+    @classmethod
+    def from_state(cls, state: dict | None) -> "TargetSpec":
+        if not state:
+            return cls()
+        return cls(
+            binary=list(state.get("binary", [])),
+            millimetres=list(state.get("millimetres", [])),
+            mean=None if state.get("mean") is None else np.asarray(state["mean"], dtype=np.float64),
+            std=None if state.get("std") is None else np.asarray(state["std"], dtype=np.float64),
+        )
+
+
+def spec_from_config(cfg) -> TargetSpec:
+    task = getattr(cfg, "task", None)
+    return TargetSpec(
+        binary=list(getattr(task, "labels", []) or []),
+        millimetres=list(getattr(task, "targets_mm", []) or []),
+    )
+
+
+class HybridLoss(nn.Module):
+    """BCE on the binary block, Huber on the standardised millimetre block.
+
+    Huber rather than MSE because the height distribution has a long right tail
+    -- sites with 30 mm of bone are common and clinically uninteresting, and
+    under MSE they would dominate the gradient over the sites near the 12 mm
+    decision boundary, which are the ones that matter.
+
+    NaN targets are masked rather than dropped. A site can have a valid
+    occupancy label and an unmeasurable width, and throwing the whole row away
+    would discard the half that is fine.
+    """
+
+    def __init__(self, spec: TargetSpec, pos_weight=None, mm_weight: float = 1.0,
+                 huber_delta: float = 1.0):
+        super().__init__()
+        self.spec = spec
+        self.mm_weight = float(mm_weight)
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight) if spec.binary else None
+        self.huber = nn.HuberLoss(reduction="none", delta=float(huber_delta))
+        # THE LOSS STANDARDISES, because nothing upstream does. The dataset
+        # yields raw millimetres -- which is right, since that is what the CSV
+        # holds and what every metric reports -- so if the comparison here were
+        # also raw, the model would learn to emit millimetres and `predict`
+        # would then un-standardise them a second time. That is not a subtle
+        # failure: training loss fell from 14.0 to 2.9 while validation MAE rose
+        # to 54 mm on a target whose whole range is 17-26 mm.
+        mean = torch.tensor(spec.mean if spec.mean is not None else [0.0], dtype=torch.float32)
+        std = torch.tensor(spec.std if spec.std is not None else [1.0], dtype=torch.float32)
+        self.register_buffer("mm_mean", mean)
+        self.register_buffer("mm_std", std)
+
+    def forward(self, out: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        n_bin = len(self.spec.binary)
+        total = out.new_zeros(())
+
+        if n_bin:
+            total = total + self.bce(out[:, :n_bin], y[:, :n_bin])
+
+        if self.spec.millimetres:
+            pred, true = out[:, n_bin:], y[:, n_bin:]
+            true = (true - self.mm_mean) / self.mm_std
+            seen = torch.isfinite(true)
+            if seen.any():
+                per = self.huber(pred, torch.nan_to_num(true))
+                total = total + self.mm_weight * (per * seen).sum() / seen.sum()
+        return total
+
+
+def regression_metrics(y_true_mm: np.ndarray, y_pred_mm: np.ndarray,
+                       names: list[str]) -> dict:
+    """MAE and RMSE in millimetres, against the floor of predicting the median.
+
+    The floor is the same discipline the BCE floor enforces: a model that has
+    learned nothing still scores something, and on these targets that something
+    is MAE 6.91 mm for height and 3.58 mm for width. A result quoted without it
+    is unreadable.
+    """
+    out = {}
+    for i, name in enumerate(names):
+        t, p = np.asarray(y_true_mm)[:, i], np.asarray(y_pred_mm)[:, i]
+        seen = np.isfinite(t) & np.isfinite(p)
+        if not seen.any():
+            out[name] = {"mae": float("nan"), "rmse": float("nan"),
+                         "mae_floor": float("nan"), "n": 0}
+            continue
+        t, p = t[seen], p[seen]
+        out[name] = {
+            "mae": float(np.abs(t - p).mean()),
+            "rmse": float(np.sqrt(((t - p) ** 2).mean())),
+            "mae_floor": float(np.abs(t - np.median(t)).mean()),
+            "rmse_floor": float(t.std()),
+            "n": int(seen.sum()),
+        }
+    return out
+
+
+def no_information_regression(y_mm: np.ndarray, names: list[str]) -> dict:
+    """What a model that has learned nothing scores, per millimetre target."""
+    y = np.asarray(y_mm, dtype=np.float64)
+    return regression_metrics(y, np.tile(np.nanmedian(y, axis=0), (len(y), 1)), names)
+
+
+def derived_feasible(pred_mm: np.ndarray, names: list[str], rules: dict,
+                     jaw: str = "lower") -> np.ndarray:
+    """Apply the clinical rules to predicted millimetres.
+
+    This is the whole point of regression: `feasible` is recovered here, at
+    inference, from configuration -- so revising a threshold is a re-score rather
+    than a retrain. Any threshold can be passed, including ones the model never
+    saw, which is what makes the sensitivity analysis possible at all.
+    """
+    idx = {n: i for i, n in enumerate(names)}
+    ok = np.ones(len(pred_mm), dtype=bool)
+    height_rule = ("min_height_mandible_mm" if jaw == "lower" else "min_height_maxilla_mm")
+    if "available_height_mm" in idx and height_rule in rules:
+        ok &= pred_mm[:, idx["available_height_mm"]] >= float(rules[height_rule])
+    if "ridge_width_mm" in idx and "min_width_mm" in rules:
+        ok &= pred_mm[:, idx["ridge_width_mm"]] >= float(rules["min_width_mm"])
+    return ok.astype(np.float32)
+
+
+def threshold_sensitivity(true_mm: np.ndarray, pred_mm: np.ndarray, names: list[str],
+                          rules: dict, sweep=(10.0, 11.0, 12.0, 13.0, 14.0),
+                          jaw: str = "lower") -> list[dict]:
+    """Agreement between predicted and measured feasibility, across thresholds.
+
+    Report this instead of a single number. It is strictly more informative than
+    any one threshold, and it is only possible because the model predicts
+    millimetres -- which is the argument for doing so, made visible.
+    """
+    rows = []
+    key = "min_height_mandible_mm" if jaw == "lower" else "min_height_maxilla_mm"
+    for t in sweep:
+        r = dict(rules)
+        r[key] = t
+        want = derived_feasible(true_mm, names, r, jaw)
+        got = derived_feasible(pred_mm, names, r, jaw)
+        seen = np.isfinite(want) & np.isfinite(got)
+        rows.append({
+            "height_threshold_mm": float(t),
+            "measured_feasible_rate": float(want[seen].mean()) if seen.any() else float("nan"),
+            "predicted_feasible_rate": float(got[seen].mean()) if seen.any() else float("nan"),
+            "agreement": float((want[seen] == got[seen]).mean()) if seen.any() else float("nan"),
+            "n": int(seen.sum()),
+        })
+    return rows
+
+
+def format_regression(metrics: dict, title: str = "") -> str:
+    """One table, millimetres, floor beside every value."""
+    lines = []
+    if title:
+        lines += ["", title.upper(), "=" * max(len(title), 62)]
+    lines.append(f"{'target':24}{'n':>6}{'MAE':>9}{'floor':>9}{'RMSE':>9}{'floor':>9}")
+    lines.append("-" * 66)
+    for name, m in metrics.items():
+        lines.append(
+            f"{name:24}{m['n']:>6}{m['mae']:>9.3f}{m.get('mae_floor', float('nan')):>9.3f}"
+            f"{m['rmse']:>9.3f}{m.get('rmse_floor', float('nan')):>9.3f}")
+    lines.append("-" * 66)
+    lines.append("MAE below the floor is the only evidence the head learned anything.")
+    return "\n".join(lines)
+
+
+def validation_skill(y_true: np.ndarray, out: np.ndarray, spec: TargetSpec,
+                     binary_metrics: dict | None = None) -> tuple[float, dict]:
+    """One number to select a checkpoint on, when the heads are not commensurable.
+
+    Macro AUROC cannot rank a hybrid model -- it says nothing about the
+    millimetre heads -- and MAE cannot either, for the mirror reason. Selecting
+    on the binary head alone would pick the checkpoint that is best at the EASY
+    half of the task ("is there a tooth here"), which is not the half the project
+    is about.
+
+    So each head is converted to SKILL: how far it has moved from its own
+    no-information floor toward perfect.
+
+        binary       (AUROC - 0.5) / 0.5      0 = chance,  1 = perfect
+        millimetre   1 - MAE / MAE_floor      0 = floor,   1 = exact
+
+    Both are 0 for a useless model and 1 for a perfect one, so the mean is
+    meaningful. Skill can go negative, which is informative rather than a bug: a
+    head predicting worse than its own floor should drag the score down.
+    """
+    parts: dict[str, float] = {}
+
+    n_bin = len(spec.binary)
+    if n_bin and binary_metrics:
+        for name in spec.binary:
+            auroc = binary_metrics.get("per_label", {}).get(name, {}).get("auroc", float("nan"))
+            if np.isfinite(auroc):
+                parts[name] = (auroc - 0.5) / 0.5
+
+    if spec.millimetres:
+        true_mm, pred_mm = y_true[:, n_bin:], out[:, n_bin:]
+        got = regression_metrics(true_mm, pred_mm, spec.millimetres)
+        for name, m in got.items():
+            floor = m.get("mae_floor", float("nan"))
+            if np.isfinite(m["mae"]) and np.isfinite(floor) and floor > 1e-9:
+                parts[name] = 1.0 - m["mae"] / floor
+
+    skill = float(np.mean(list(parts.values()))) if parts else float("nan")
+    return skill, parts

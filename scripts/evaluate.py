@@ -23,7 +23,11 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.dataset import CachedVolumeDataset, load_label_matrix, restrict_to_cache  # noqa: E402
-from src.data.taskdef import external_dataset, label_names_for, primary_dataset  # noqa: E402
+from src.data.taskdef import (  # noqa: E402
+    external_dataset,
+    label_names_for,
+    primary_dataset,
+)
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file, predict  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402

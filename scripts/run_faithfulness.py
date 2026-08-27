@@ -18,13 +18,13 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
+from src.train.targets import TargetSpec  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -38,6 +38,7 @@ from src.xai.faithfulness import (  # noqa: E402
     model_randomization_check,
 )
 from src.xai.runner import (
+    explanation_target,
     load_case_set,
     load_model,
     require_prerequisites,
@@ -86,7 +87,8 @@ def main() -> None:
     set_seed(cfg.seed, deterministic=args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model, _ = load_model(cfg, args.checkpoint, device)
+    model, ckpt = load_model(cfg, args.checkpoint, device)
+    spec = TargetSpec.from_state(ckpt.get("target_spec"))
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     cases = load_case_set(cfg, args.split, dataset, fold=fold)
     ids, y, label_names = cases.ids, cases.y, cases.labels
@@ -113,8 +115,10 @@ def main() -> None:
         with torch.no_grad():
             probs = torch.sigmoid(model(volume))[0].cpu().numpy()
 
-        # Explain the label the model is most confident about for this patient.
-        target = int(np.argmax(probs))
+        # See runner.explanation_target: on the hybrid task this is
+        # available_height_mm, whose evidence is crest-to-canal distance and
+        # therefore checkable against an annotated structure.
+        target = explanation_target(cfg, spec, probs)
         maps, results = {}, {}
 
         for name, method in methods.items():
@@ -196,7 +200,8 @@ def main() -> None:
     for pid in ids[:rand_cases]:
         volume = cases.load(pid, device)
         with torch.no_grad():
-            target = int(np.argmax(torch.sigmoid(model(volume))[0].cpu().numpy()))
+            target = explanation_target(cfg, spec,
+                                        torch.sigmoid(model(volume))[0].cpu().numpy())
 
         for name in methods:
             intact = methods[name].attribute(volume, target)

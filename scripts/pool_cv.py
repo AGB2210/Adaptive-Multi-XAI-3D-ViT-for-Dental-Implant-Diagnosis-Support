@@ -32,7 +32,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.splits import check_folds_disjoint, load_folds  # noqa: E402
-from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
+from src.data.taskdef import all_target_names, primary_dataset  # noqa: E402
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
@@ -68,7 +68,11 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    labels = label_names_for(cfg)
+    # EVERY head, binary and millimetre. Sizing from the binary block alone
+    # builds a 1-output model against a 3-output checkpoint, and torch refuses
+    # to load it -- which is the good outcome. The silent version of this bug is
+    # a head that happens to match and reports one target under another's name.
+    labels = all_target_names(cfg)
     cfg.model.num_classes = len(labels)
 
     set_seed(cfg.seed)

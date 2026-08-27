@@ -31,7 +31,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-SITE_TARGETS = ("needs_implant", "feasible")
+SITE_TARGETS = ("needs_implant", "available_height_mm", "ridge_width_mm")
 
 
 def load_sites(

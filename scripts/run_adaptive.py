@@ -27,6 +27,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
+from src.train.targets import TargetSpec  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -47,6 +48,7 @@ from src.xai.calibration import (  # noqa: E402
     uncertainty,
 )
 from src.xai.runner import (
+    explanation_target,
     load_case_set,
     load_model,
     predict_case_logits,
@@ -88,7 +90,8 @@ def main() -> None:
     set_seed(cfg.seed, deterministic=args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model, _ = load_model(cfg, args.checkpoint, device)
+    model, ckpt = load_model(cfg, args.checkpoint, device)
+    spec = TargetSpec.from_state(ckpt.get("target_spec"))
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     art = artifacts_dir(cfg)
 
@@ -144,7 +147,7 @@ def main() -> None:
     for i, pid in enumerate([] if args.from_csv else ids):
         volume = cases.load(pid, device)
         baseline = make_baseline(volume, "blur")
-        target = int(np.argmax(test_probs[i]))
+        target = explanation_target(cfg, spec, test_probs[i])
 
         maps = {name: method.attribute(volume, target) for name, method in methods.items()}
         result = fuse(model, volume, maps, target,

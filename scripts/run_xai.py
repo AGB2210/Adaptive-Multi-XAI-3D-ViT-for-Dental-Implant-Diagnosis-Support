@@ -20,7 +20,11 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
+from src.data.taskdef import (  # noqa: E402
+    all_target_names,
+    label_names_for,
+    primary_dataset,
+)
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -219,14 +223,22 @@ def main() -> None:
     log.info("explaining case %s (%d in fold-%s test split)", ids[0], len(ids), fold)
 
     if "integrated_gradients" in methods:
+        # EVERY head, not only the binary ones. Completeness is a property of the
+        # attribution against the model's output, and it holds for a regression
+        # head exactly as it does for a logit -- so checking only `needs_implant`
+        # would leave the axiom unverified on the two outputs the project's XAI
+        # claim actually rests on. available_height_mm is crest-to-canal
+        # distance, which is the target whose evidence is checkable against an
+        # annotated structure.
+        target_names = all_target_names(cfg)
         errors = []
-        for label in range(len(label_names)):
+        for label in range(len(target_names)):
             t0 = time.perf_counter()
             methods["integrated_gradients"].attribute(volume, label)
             log.info("IG completeness %d/%d (%s): %.1fs",
-                     label + 1, len(label_names), label_names[label], time.perf_counter() - t0)
+                     label + 1, len(target_names), target_names[label], time.perf_counter() - t0)
             errors.append({
-                "target_label": label_names[label],
+                "target_label": target_names[label],
                 **methods["integrated_gradients"].last_completeness,
             })
         ig_df = pd.DataFrame(errors)

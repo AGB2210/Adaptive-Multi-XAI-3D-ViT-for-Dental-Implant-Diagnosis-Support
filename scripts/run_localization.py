@@ -31,7 +31,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.preprocess import preprocess_mask  # noqa: E402
-from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
+from src.data.taskdef import all_target_names, primary_dataset  # noqa: E402
 from src.utils.config import artifacts_dir, label_path, load_config, volume_path  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -86,17 +86,33 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    labels = label_names_for(cfg)
+    # EVERY head, binary and millimetre. Sizing from the binary block alone
+    # builds a 1-output model against a 3-output checkpoint, and torch refuses
+    # to load it -- which is the good outcome. The silent version of this bug is
+    # a head that happens to match and reports one target under another's name.
+    labels = all_target_names(cfg)
     cfg.model.num_classes = len(labels)
     is_sites = bool(getattr(cfg.task, "sites_csv", None))
 
-    label = args.label or ("feasible" if is_sites else "implant")
+    # The site task now regresses millimetres, so the explanation being scored is
+    # the one for AVAILABLE HEIGHT -- which in the mandible is crest-to-canal
+    # distance. That is a strictly stronger test than the old `feasible`==0 one:
+    # a model predicting the distance correctly MUST have found both the crest
+    # and the canal, so "did the explanation point at the right anatomy?" has a
+    # ground-truth answer rather than a plausible-looking one.
+    #
+    # CASE SELECTION still uses the measured `feasible` column from the CSV,
+    # which the label builder still writes. It is no longer a model output, but
+    # it is the right filter: the sites where the canal is genuinely the
+    # limiting structure are the ones where the explanation has something to
+    # point at. 408 of the 478 infeasible mandibular sites are nerve-limited.
+    labels = all_target_names(cfg)
+    default_label = ("available_height_mm" if "available_height_mm" in labels
+                     else ("feasible" if is_sites else "implant"))
+    label = args.label or default_label
     if label not in labels:
         raise SystemExit(f"--label {label!r} is not one of {labels}")
     target = labels.index(label)
-    # On the site task the interesting verdict is the NEGATIVE one: an
-    # explanation for "not feasible" should land on whatever blocks the implant,
-    # and in the mandible that is the nerve canal 289 times out of 361.
     want = args.target_value if args.target_value is not None else (0 if is_sites else 1)
 
     fold = resolve_fold(args.checkpoint, args.fold)
@@ -110,8 +126,8 @@ def main() -> None:
     # from src/xai/site_masks.py instead.
     indices = None if is_sites else class_index_map(cfg, labels)
     model, ckpt = load_model(cfg, args.checkpoint, device)
-    log.info("checkpoint epoch %s | scoring '%s'==%d explanations against %s",
-             ckpt.get("epoch"), label, want,
+    log.info("checkpoint epoch %s | explaining '%s' against %s",
+             ckpt.get("epoch"), label,
              "anatomy (nerve vs jawbone)" if is_sites else "restoration masks")
 
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
@@ -125,13 +141,29 @@ def main() -> None:
 
     cases = load_case_set(cfg, "test", dataset, fold=fold)
     ids, y = cases.ids, cases.y
-    selected = [(pid, row) for pid, row in zip(ids, y) if int(row[target]) == want]
+
+    # WHICH CASES, and WHICH OUTPUT, are two different questions now.
+    #
+    # The output being explained is a millimetre head, so filtering cases on
+    # `int(row[target]) == 0` would ask for sites with zero millimetres of bone
+    # and select nothing. Selection comes from the measured `feasible` column in
+    # the CSV -- still written by the label builder, no longer a model output --
+    # which is the right filter regardless: it picks the sites where something
+    # actually blocks the implant, so the explanation has a structure to point at.
+    filter_col = "feasible" if (is_sites and cases.sites is not None
+                                and "feasible" in cases.sites.columns) else label
+    if filter_col in labels:
+        selected = [(pid, row) for pid, row in zip(ids, y) if int(row[labels.index(filter_col)]) == want]
+    else:
+        by_id = {f"{r.patient_id}#{int(r.tooth)}": r for r in cases.sites.itertuples()}
+        selected = [(pid, row) for pid, row in zip(ids, y)
+                    if pid in by_id and int(getattr(by_id[pid], filter_col, -1)) == want]
     if not selected:
-        raise SystemExit(f"no cases with {label}=={want} in the fold-{fold} test split")
+        raise SystemExit(f"no cases with {filter_col}=={want} in the fold-{fold} test split")
     n_available = len(selected)
     selected = selected[: args.n_cases]
-    log.info("%d cases with %s==%d in fold-%s test (scoring %d)",
-             n_available, label, want, fold, len(selected))
+    log.info("%d cases with %s==%d in fold-%s test, explaining '%s' (scoring %d)",
+             n_available, filter_col, want, fold, label, len(selected))
 
     # WHAT THE EXPLANATION IS SCORED AGAINST.
     #

@@ -12,10 +12,17 @@ before you start paying for a GPU.**
 
 For each tooth position in a CBCT scan, the model predicts two things:
 
-| Label | Question |
-|---|---|
-| `needs_implant` | Is this site missing a tooth that should be replaced? |
-| `feasible` | Is there enough bone, clear of the nerve, to actually place one? |
+| Head | Kind | Question |
+|---|---|---|
+| `needs_implant` | binary | Is this site missing a tooth that should be replaced? |
+| `available_height_mm` | **millimetres** | How much bone is there, crest to nerve? |
+| `ridge_width_mm` | **millimetres** | How wide is the ridge? |
+
+**Feasibility is not predicted — it is computed afterwards**, from the two
+millimetre outputs and the thresholds in the config. That is deliberate: the
+12 mm rule moves a third of the answers, and applying it at inference means
+revising it is a re-score rather than five folds of retraining. `train.py`
+prints the whole threshold sweep.
 
 It is a 3D Vision Transformer written from scratch, plus eight explainability
 methods also written from scratch. Explanations are scored against the inferior
@@ -235,14 +242,14 @@ it is slower.
 scores exactly this**, so compare against it and never against zero:
 
 ```
-BCE floor    0.9145      macro, with pos_weight applied
-AUROC floor  0.500
-AP floor     0.3404      = mean prevalence
+needs_implant       BCE floor 0.3348   AUROC floor 0.500   AP floor 0.1045
+available_height_mm MAE floor 6.91 mm  RMSE floor 7.97 mm
+ridge_width_mm      MAE floor 3.58 mm  RMSE floor 4.40 mm
 ```
 
 | What you see | What it means |
 |---|---|
-| Val loss stuck near **0.9145** | learned nothing. Not a bug — a result. Report it |
+| MAE at or above its floor | that head learned nothing. Not a bug — a result. Report it |
 | Macro AUROC CI **includes 0.500** | indistinguishable from chance. Say so plainly |
 | AUROC above 0.5 with a CI that excludes it | a real signal |
 
@@ -251,9 +258,11 @@ changed the labels: it was 1.2026 before, and the superseded three-label task's
 was 1.0652. Quoting any of them against another is a category error. `train.py`
 solves for the current one and prints it; use what it prints.
 
-`needs_implant` has 10.4% prevalence; `feasible` has 57.6%. **Accuracy is
-meaningless on `needs_implant`** — always quote AUROC and AP with confidence
-intervals. Those intervals must be **bootstrapped over patients, not rows**: one
+`needs_implant` has 10.4% prevalence, so **accuracy is meaningless on it** —
+quote AUROC and AP with confidence intervals. For the millimetre heads quote MAE
+in millimetres beside its floor; an MAE with no floor next to it is unreadable.
+
+Every interval must be **bootstrapped over patients, not rows**: one
 jaw contributes ~14 sites, so resampling rows measures within-patient
 repeatability and reports it as between-patient uncertainty.
 

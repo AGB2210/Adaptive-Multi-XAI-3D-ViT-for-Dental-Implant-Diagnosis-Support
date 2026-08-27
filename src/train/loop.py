@@ -14,6 +14,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from src.train.metrics import evaluate
+from src.train.targets import HybridLoss, regression_metrics, validation_skill
 from src.utils.log import get_logger
 
 log = get_logger("train")
@@ -49,18 +50,36 @@ def cosine_warmup(step: int, warmup_steps: int, total_steps: int, min_ratio: flo
 
 
 @torch.no_grad()
-def predict(model: nn.Module, loader: DataLoader, device: torch.device, amp: bool = False) -> tuple[np.ndarray, np.ndarray]:
-    """Returns (probabilities, targets)."""
+def predict(model: nn.Module, loader: DataLoader, device: torch.device, amp: bool = False,
+            spec=None) -> tuple[np.ndarray, np.ndarray]:
+    """Returns (outputs, targets).
+
+    Binary columns come back as probabilities; millimetre columns come back as
+    MILLIMETRES, having skipped the sigmoid and been un-standardised. Sigmoid on
+    a regression head squashes every prediction into (0, 1), which on a target
+    with a 6-31 mm range collapses the output to a constant and looks exactly
+    like a model that failed to learn.
+    """
     model.eval()
-    probs, targets = [], []
+    outs, targets = [], []
+    n_bin = len(spec.binary) if spec is not None else None
     autocast = torch.autocast(device_type=device.type, enabled=amp and device.type == "cuda")
     for x, y in loader:
         x = x.to(device, non_blocking=True)
         with autocast:
-            logits = model(x)
-        probs.append(torch.sigmoid(logits.float()).cpu().numpy())
+            logits = model(x).float()
+        if n_bin is None:
+            out = torch.sigmoid(logits)
+        else:
+            out = logits.clone()
+            if n_bin:
+                out[:, :n_bin] = torch.sigmoid(logits[:, :n_bin])
+        outs.append(out.cpu().numpy())
         targets.append(y.numpy())
-    return np.concatenate(probs), np.concatenate(targets)
+    out = np.concatenate(outs)
+    if spec is not None and spec.is_hybrid:
+        out = spec.to_millimetres(out)
+    return out, np.concatenate(targets)
 
 
 class Trainer:
@@ -72,6 +91,7 @@ class Trainer:
         pos_weight: torch.Tensor | None = None,
         device: torch.device | None = None,
         out_dir: str | Path | None = None,
+        spec=None,
     ):
         self.cfg = cfg
         self.label_names = label_names
@@ -83,7 +103,21 @@ class Trainer:
 
         if pos_weight is not None:
             pos_weight = pos_weight.to(self.device)
-        self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+        # A pure-classification task keeps plain BCE, unchanged. HybridLoss only
+        # engages when the config declares millimetre targets, which is what
+        # leaves the superseded detection path working exactly as before.
+        self.spec = spec
+        if spec is not None and spec.is_hybrid:
+            self.criterion = HybridLoss(
+                spec, pos_weight=pos_weight,
+                mm_weight=float(getattr(cfg.task, "mm_weight", 1.0)),
+            )
+        else:
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        # HybridLoss carries the standardiser as buffers, so it has to follow the
+        # model onto the device like any other module.
+        self.criterion = self.criterion.to(self.device)
 
         # No weight decay on norms, biases, or the positional/CLS parameters.
         decay, no_decay = [], []
@@ -103,7 +137,12 @@ class Trainer:
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp)
 
         self.start_epoch = 0
-        self.best_macro_auroc = -1.0
+        # -inf, not -1.0. The selection metric is macro AUROC for a pure
+        # classifier, where -1.0 is safely below any real value -- but SKILL for
+        # a hybrid task, and skill is unbounded below. An untrained regression
+        # head scores around -3, so a -1.0 floor meant no epoch ever counted as
+        # an improvement and best.pt was never written.
+        self.best_macro_auroc = float("-inf")
         self.history: list[dict] = []
         self.writer = None
 
@@ -162,19 +201,45 @@ class Trainer:
             t0 = time.time()
             train_loss = self.train_epoch(train_loader, epoch, total_steps, warmup_steps)
 
-            probs, targets = predict(self.model, val_loader, self.device, self.amp)
-            metrics = evaluate(targets, probs, self.label_names)
-            macro = metrics["macro_auroc"]
+            probs, targets = predict(self.model, val_loader, self.device, self.amp,
+                                     spec=self.spec)
+            hybrid = self.spec is not None and self.spec.is_hybrid
+            n_bin = len(self.spec.binary) if self.spec is not None else len(self.label_names)
+
+            if n_bin:
+                metrics = evaluate(targets[:, :n_bin], probs[:, :n_bin],
+                                   self.label_names[:n_bin])
+            else:
+                metrics = {"macro_auroc": float("nan"), "macro_ap": float("nan"),
+                           "macro_f1": float("nan"), "per_label": {}}
 
             row = {
                 "epoch": epoch,
                 "train_loss": round(train_loss, 5),
-                "val_macro_auroc": round(macro, 5) if np.isfinite(macro) else float("nan"),
+                "val_macro_auroc": round(metrics["macro_auroc"], 5)
+                if np.isfinite(metrics["macro_auroc"]) else float("nan"),
                 "val_macro_ap": round(metrics["macro_ap"], 5),
                 "val_macro_f1": round(metrics["macro_f1"], 5),
                 "lr": self.optimizer.param_groups[0]["lr"],
                 "seconds": round(time.time() - t0, 1),
             }
+
+            if hybrid:
+                # Select on SKILL, not AUROC. AUROC scores only the binary head,
+                # which is the easy half of the task ("is there a tooth here"),
+                # so selecting on it would pick the checkpoint that is best at
+                # the half the project is not about.
+                macro, parts = validation_skill(targets, probs, self.spec, metrics)
+                mm = regression_metrics(targets[:, n_bin:], probs[:, n_bin:],
+                                        self.spec.millimetres)
+                for name, m in mm.items():
+                    row[f"val_mae_{name}"] = round(m["mae"], 4)
+                row["val_skill"] = round(macro, 5) if np.isfinite(macro) else float("nan")
+                metrics["skill"] = macro
+                metrics["skill_parts"] = parts
+                metrics["regression"] = mm
+            else:
+                macro = metrics["macro_auroc"]
             self.history.append(row)
             self._log_row(row)
 
@@ -187,10 +252,19 @@ class Trainer:
                 since_best += 1
             self.save_checkpoint(epoch, "last.pt")
 
-            log.info(
-                "epoch %3d | loss %.4f | val macro AUROC %.4f%s | %.0fs",
-                epoch, train_loss, macro, "  <- best" if improved else "", row["seconds"],
-            )
+            if hybrid:
+                mm_txt = " ".join(f"{n.replace('_mm', '')} MAE {m['mae']:.2f}mm"
+                                  for n, m in metrics["regression"].items())
+                log.info(
+                    "epoch %3d | loss %.4f | skill %.4f | AUROC %.3f | %s%s | %.0fs",
+                    epoch, train_loss, macro, metrics["macro_auroc"], mm_txt,
+                    "  <- best" if improved else "", row["seconds"],
+                )
+            else:
+                log.info(
+                    "epoch %3d | loss %.4f | val macro AUROC %.4f%s | %.0fs",
+                    epoch, train_loss, macro, "  <- best" if improved else "", row["seconds"],
+                )
 
             if patience and since_best >= patience:
                 log.info("early stopping: no val improvement for %d epochs", patience)
@@ -221,6 +295,11 @@ class Trainer:
             "scaler": self.scaler.state_dict(),
             "best_macro_auroc": self.best_macro_auroc,
             "label_names": self.label_names,
+            # The standardiser MUST travel with the weights. Without it a
+            # reloaded model returns standardised units that look like
+            # millimetres -- every prediction near zero, every MAE near the
+            # target's mean, and nothing raises.
+            "target_spec": self.spec.state_dict() if self.spec is not None else None,
         }
         torch.save(payload, self.out_dir / name)
         if metrics is not None:

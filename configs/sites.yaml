@@ -15,10 +15,30 @@ data:
   artifacts_dir: artifacts_sites
 
 task:
-  # Two independent questions per site, so binary cross-entropy over two
-  # outputs rather than a 3-way softmax: a site can need an implant and be
-  # infeasible, and collapsing that into one class throws the pairing away.
-  labels: [needs_implant, feasible]
+  # ONE binary head, TWO millimetre heads.
+  #
+  # `feasible` is not an observation. It is a rule applied to two measurements:
+  #     feasible = available_height_mm >= 12.0 and ridge_width_mm >= 6.0
+  # Training on it compiles 12.0 into the weights, and that threshold is the
+  # largest single lever in the project. Over the 709 mandibular teeth-tier
+  # sites that need an implant:
+  #     height rule 10 mm -> 266 infeasible (37.5%)
+  #     height rule 12 mm -> 390 infeasible (55.0%)
+  #     height rule 14 mm -> 503 infeasible (70.9%)
+  # A 2 mm revision moves a third of the answers. As a classifier that costs
+  # five folds of retraining; predicting millimetres it costs a re-score, and
+  # the sensitivity sweep above becomes a reportable result rather than a risk.
+  #
+  # `needs_implant` stays binary because it is occupancy -- is this socket empty
+  # -- with no millimetre quantity underneath it. Expect it to be easy: "is
+  # there a tooth in this patch" is a simple visual task, so a high AUROC there
+  # is a sanity check, not a finding.
+  labels: [needs_implant]
+  targets_mm: [available_height_mm, ridge_width_mm]
+  # Relative weight of the millimetre block against BCE. 1.0 with standardised
+  # targets puts them on comparable footing; raise it if the binary head, which
+  # is the easier task, starts dominating.
+  mm_weight: 1.0
   sites_csv: sites_toothfairy3.csv
   # Which site-localisation tiers to train on. "teeth" alone is the accurate
   # subset (leave-one-out median error 1.9 mm); adding the weaker tiers brings
@@ -66,7 +86,9 @@ model:
   # patch-embedding convolution shrinks. Verify with model.grid_size rather than
   # by arithmetic; scripts/run_xai.py prints it from the checkpoint.
   patch_size: 4
-  num_classes: 2
+  # ONE binary head plus TWO millimetre heads. This counts the whole head; the
+  # binary block alone would silently drop the regression outputs.
+  num_classes: 3
 
 train:
   # Checkpoints live beside this task's other artifacts. Inheriting

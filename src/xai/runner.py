@@ -27,7 +27,12 @@ from src.data.site_dataset import (
     target_matrix,
 )
 from src.data.splits import check_disjoint, fold_assignment, load_folds, load_splits
-from src.data.taskdef import external_dataset, label_names_for, primary_dataset
+from src.data.taskdef import (
+    all_target_names,
+    external_dataset,
+    label_names_for,
+    primary_dataset,
+)
 from src.models import build_model
 from src.train.loop import load_checkpoint_file
 from src.utils.config import artifacts_dir
@@ -258,7 +263,12 @@ def load_case_set(cfg, split: str = "test", dataset: str | None = None,
     art = artifacts_dir(cfg)
     dataset = dataset or primary_dataset(cfg)
     cache = cache_dir_for(cfg, dataset)
-    labels = label_names_for(cfg)
+    # EVERY target, binary and millimetre. `cases.labels` indexes the model's
+    # output columns, so a binary-only list makes label_names[1] an IndexError
+    # the moment an explanation targets a millimetre head -- and the silent
+    # version, on a task where the lengths happen to match, labels one head's
+    # attribution with another head's name.
+    labels = all_target_names(cfg)
     sites_csv = getattr(cfg.task, "sites_csv", None)
 
     if not sites_csv:
@@ -396,3 +406,43 @@ def select_cases(ids, y, n: int, seed: int, log=None):
 def patients_of(ids) -> list[str]:
     """Patient for each case id, for clustering a bootstrap by patient."""
     return [str(i).split(SITE_SEP)[0] for i in ids]
+
+
+def explanation_target(cfg, spec=None, outputs=None) -> int:
+    """Which output column to explain.
+
+    For a pure-classification task, the most confident label -- which is what
+    every script did, and remains right there.
+
+    For the hybrid site task, the FIRST MILLIMETRE TARGET, by default
+    `available_height_mm`. Two reasons, and the second is the important one.
+
+    Mechanically, `argmax(sigmoid(out))` is meaningless once some columns are
+    millimetres: a predicted 18 mm sigmoids to 1.0 and wins every comparison, so
+    the "most confident label" is whichever regression head happens to have the
+    largest raw value.
+
+    Scientifically, this is the target worth explaining. Available height in the
+    mandible is crest-to-canal distance, so a model predicting it correctly MUST
+    have located both the crest and the inferior alveolar canal -- and the canal
+    is annotated in every scan. That makes "did the explanation point at the
+    right anatomy?" answerable against ground truth rather than merely plausible,
+    which is the whole reason this task is a usable XAI testbed. Explaining a
+    binary feasibility head instead only ever asked whether the map looked
+    reasonable.
+
+    `task.explain_target` overrides by name.
+    """
+    names = all_target_names(cfg)
+    wanted = getattr(getattr(cfg, "task", None), "explain_target", None)
+    if wanted:
+        if wanted not in names:
+            raise ValueError(f"task.explain_target={wanted!r} is not one of {names}")
+        return names.index(wanted)
+
+    if spec is not None and spec.is_hybrid:
+        return len(spec.binary)                     # first millimetre column
+
+    if outputs is not None:
+        return int(np.argmax(np.asarray(outputs).ravel()))
+    return 0

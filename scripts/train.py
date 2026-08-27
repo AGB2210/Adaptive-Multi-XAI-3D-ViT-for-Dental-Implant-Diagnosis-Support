@@ -51,11 +51,23 @@ from src.data.splits import (  # noqa: E402
     save_splits,
     split_prevalence,
 )
-from src.data.taskdef import label_names_for, primary_dataset  # noqa: E402
+from src.data.taskdef import (  # noqa: E402
+    all_target_names,
+    label_names_for,
+    primary_dataset,
+    regression_names_for,
+)
 from src.models import build_model
 from src.models.prevalence import PrevalenceBaseline  # noqa: E402
 from src.train.loop import Trainer, predict  # noqa: E402
 from src.train.metrics import evaluate, format_metrics, no_information_bce  # noqa: E402
+from src.train.targets import (  # noqa: E402
+    format_regression,
+    no_information_regression,
+    regression_metrics,
+    spec_from_config,
+    threshold_sensitivity,
+)
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed, worker_init_fn  # noqa: E402
@@ -197,9 +209,19 @@ def synthetic_loaders(cfg, n_train: int = 96, n_val: int = 32):
     # The gate must build volumes the model can actually take, and the site
     # task has no fixed preprocessing grid to read that from.
     shape = (model_img_size(cfg),) * 3
-    n_labels = len(label_names_for(cfg))
-    xtr, ytr = make_dataset(n_train, seed=0, shape=shape, n_labels=n_labels)
-    xva, yva = make_dataset(n_val, seed=10_000, shape=shape, n_labels=n_labels)
+    n_bin = len(label_names_for(cfg))
+    n_mm = len(regression_names_for(cfg))
+    if n_mm:
+        # A hybrid head needs continuous targets for its regression columns, or
+        # the gate trains them on zeros and ones and reports a meaningless MAE.
+        from tests.synthetic import make_hybrid_dataset
+        xtr, ytr = make_hybrid_dataset(n_train, seed=0, shape=shape,
+                                       n_binary=n_bin, n_mm=n_mm)
+        xva, yva = make_hybrid_dataset(n_val, seed=10_000, shape=shape,
+                                       n_binary=n_bin, n_mm=n_mm)
+    else:
+        xtr, ytr = make_dataset(n_train, seed=0, shape=shape, n_labels=n_bin)
+        xva, yva = make_dataset(n_val, seed=10_000, shape=shape, n_labels=n_bin)
 
     def loader(x, y, shuffle):
         ds = TensorDataset(torch.from_numpy(x).float(), torch.from_numpy(y).float())
@@ -240,9 +262,14 @@ def main() -> None:
     # The head count follows the label subset, never the other way round -- a
     # config whose num_classes disagreed with data.train_labels would train
     # silently against misaligned columns.
-    labels = label_names_for(cfg)
+    # Every output column, binary first then millimetres. num_classes counts the
+    # WHOLE head: a hybrid task with one binary and two millimetre targets needs
+    # three outputs, and sizing it from the binary block alone would silently
+    # drop the regression heads.
+    labels = all_target_names(cfg)
+    spec = spec_from_config(cfg)
     if cfg.model.num_classes != len(labels):
-        log.info("num_classes %d -> %d to match data.train_labels",
+        log.info("num_classes %d -> %d to match the declared targets",
                  cfg.model.num_classes, len(labels))
         cfg.model.num_classes = len(labels)
     log.info("training on %d labels: %s", len(labels), ", ".join(labels))
@@ -313,24 +340,44 @@ def main() -> None:
     # Printed before training because a loss is uninterpretable without it, and
     # because the floor moves with the label set -- the previous three-label
     # task's floor was 1.0652 and quoting it here would be a category error.
-    pos_weight = pos_weight_from_labels(y_train)
-    floor = no_information_bce(y_train, pos_weight)
+    binary_names = label_names_for(cfg)
+    mm_names = regression_names_for(cfg)
+    n_bin = len(binary_names)
+
+    # The standardiser is fitted on the TRAINING split only. Fitting it on
+    # everything would leak the validation distribution into the output scale --
+    # a small leak, but the kind that is invisible in every metric.
+    spec.fit(y_train)
+
+    pos_weight = pos_weight_from_labels(y_train[:, :n_bin]) if n_bin else None
     print()
     print("=" * 62)
     print("NO-INFORMATION FLOOR -- train")
     print("=" * 62)
-    for name, f, prev in zip(labels, floor["per_label"], floor["prevalence"]):
-        print(f"  {name:<22} floor {f:6.4f}   prevalence {prev:6.4f}")
-    print(f"  {'MACRO':<22} floor {floor['floor']:6.4f}")
+    if n_bin:
+        floor = no_information_bce(y_train[:, :n_bin], pos_weight)
+        for name, f, prev in zip(binary_names, floor["per_label"], floor["prevalence"]):
+            print(f"  {name:<22} floor {f:6.4f}   prevalence {prev:6.4f}")
+        print(f"  {'MACRO (BCE)':<22} floor {floor['floor']:6.4f}")
+    if mm_names:
+        # Millimetre targets get the same discipline: a model predicting the
+        # median still scores something, and an MAE quoted without it is
+        # unreadable.
+        mm_floor = no_information_regression(y_train[:, n_bin:], mm_names)
+        for name, m in mm_floor.items():
+            print(f"  {name:<22} MAE floor {m['mae']:6.3f} mm   "
+                  f"RMSE floor {m['rmse']:6.3f} mm")
     print("  a training loss at or above this has learned nothing")
 
-    baseline = PrevalenceBaseline(len(labels)).fit(y_train)
-    for name in ("val", "test"):
-        if name not in matrices:
-            continue
-        y_true = matrices[name][1]
-        metrics = evaluate(y_true, baseline.predict_proba(len(y_true)), labels)
-        print("\n" + format_metrics(metrics, labels, f"PREVALENCE BASELINE -- {name}"))
+    if n_bin:
+        baseline = PrevalenceBaseline(n_bin).fit(y_train[:, :n_bin])
+        for name in ("val", "test"):
+            if name not in matrices:
+                continue
+            y_true = matrices[name][1][:, :n_bin]
+            metrics = evaluate(y_true, baseline.predict_proba(len(y_true)), binary_names)
+            print("\n" + format_metrics(metrics, binary_names,
+                                        f"PREVALENCE BASELINE -- {name}"))
 
     # ---- model ---------------------------------------------------------
     # The site task sets model.img_size directly and leaves preprocess.out_shape
@@ -347,41 +394,78 @@ def main() -> None:
         pos_weight=pos_weight,
         device=device,
         out_dir=out_dir,
+        spec=spec,
     )
     if args.resume:
         trainer.load_checkpoint(args.resume)
 
     result = trainer.fit(loaders["train"], loaders["val"], epochs=args.epochs)
-    log.info("best val macro AUROC: %.4f", result["best_macro_auroc"])
+    log.info("best val %s: %.4f", "skill" if spec.is_hybrid else "macro AUROC",
+             result["best_macro_auroc"])
 
     # ---- final evaluation ----------------------------------------------
     best = out_dir / "best.pt"
     if best.exists():
         trainer.load_checkpoint(best, resume=False)
 
-    probs, targets = predict(trainer.model, loaders["val"], device, trainer.amp)
-    val_metrics = evaluate(targets, probs, labels, n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
-    print("\n" + format_metrics(val_metrics, labels, f"{cfg.model.name.upper()} -- val"))
+    def score(split):
+        """Binary metrics on the binary block, millimetre metrics on the rest.
 
-    summary = {"val": val_metrics, "n_params": n_params, "model": cfg.model.name,
-               "labels": labels}
+        Running `evaluate` over every column treated 18.0 mm as a probability:
+        it reported available_height_mm at "prevalence 20.57" with an AP of
+        20.226, numbers that are not wrong so much as meaningless. Each block
+        gets the metrics its units admit.
+        """
+        out, y = predict(trainer.model, loaders[split], device, trainer.amp, spec=spec)
+        res = {}
+        if n_bin:
+            res["classification"] = evaluate(
+                y[:, :n_bin], out[:, :n_bin], binary_names,
+                n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+        if mm_names:
+            res["regression"] = regression_metrics(y[:, n_bin:], out[:, n_bin:], mm_names)
+            # Feasibility is recovered HERE, from configuration, across a sweep
+            # of thresholds the model never saw. This is the payoff for
+            # regressing millimetres, and it is a stronger result than any
+            # single threshold could be.
+            res["threshold_sensitivity"] = threshold_sensitivity(
+                y[:, n_bin:], out[:, n_bin:], mm_names, dict(vars(cfg.sites)),
+                jaw=(list(getattr(cfg.task, "site_jaws", ["lower"])) or ["lower"])[0])
+        return res, out, y
+
+    val_res, val_out, val_y = score("val")
+    if "classification" in val_res:
+        print("\n" + format_metrics(val_res["classification"], binary_names,
+                                    f"{cfg.model.name.upper()} -- val"))
+    if "regression" in val_res:
+        print(format_regression(val_res["regression"],
+                                f"{cfg.model.name} -- val, millimetres"))
+        print()
+        print("FEASIBILITY RECOVERED AT INFERENCE (val)")
+        print(f"{'height rule':>14}{'measured':>12}{'predicted':>12}{'agreement':>12}")
+        for r in val_res["threshold_sensitivity"]:
+            print(f"{r['height_threshold_mm']:>11.1f} mm{r['measured_feasible_rate']:>12.3f}"
+                  f"{r['predicted_feasible_rate']:>12.3f}{r['agreement']:>12.3f}")
+        print("  the threshold is applied here, not compiled into the weights:")
+        print("  revising it is a re-score, not five folds of retraining.")
+
+    summary = {"val": val_res, "n_params": n_params, "model": cfg.model.name,
+               "labels": labels, "binary": binary_names, "millimetres": mm_names,
+               "target_spec": spec.state_dict()}
 
     # The test split is scored only when asked for. Printing it after every run
-    # leaks it by repetition: the capacity ladder in the README trains several
-    # models and picks one, and a number you have seen has influenced you whether
-    # or not you tuned a threshold on it. Train and select on validation; run
-    # scripts/evaluate.py (or --test) once, at the end.
+    # leaks it by repetition: a number you have seen has influenced you whether
+    # or not you tuned a threshold on it.
     if args.test and "test" in loaders:
         log.warning("scoring the TEST split -- do this once, after model selection is final")
-        # Thresholds tuned on val, applied unchanged to test -- no leakage.
-        probs, targets = predict(trainer.model, loaders["test"], device, trainer.amp)
-        test_metrics = evaluate(
-            targets, probs, labels,
-            thresholds=val_metrics["thresholds"],
-            n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci,
-        )
-        print("\n" + format_metrics(test_metrics, labels, f"{cfg.model.name.upper()} -- test"))
-        summary["test"] = test_metrics
+        test_res, _, _ = score("test")
+        if "classification" in test_res:
+            print("\n" + format_metrics(test_res["classification"], binary_names,
+                                        f"{cfg.model.name.upper()} -- test"))
+        if "regression" in test_res:
+            print(format_regression(test_res["regression"],
+                                    f"{cfg.model.name} -- test, millimetres"))
+        summary["test"] = test_res
 
     (out_dir / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     log.info("wrote %s", out_dir / "metrics.json")

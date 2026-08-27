@@ -39,17 +39,23 @@ def world(tmp_path):
                 "patient_id": pid, "tooth": tooth, "jaw": "lower",
                 "site_method": "teeth", "site_x": 24.0, "site_y": 24.0, "site_z": 24.0,
                 "needs_implant": 1.0, "feasible": feasible, "reason": reason,
+                "available_height_mm": 8.0 if feasible == 0.0 else 18.0,
+                "ridge_width_mm": 9.0,
             })
     # one row that must never reach training
     rows.append({"patient_id": "P1", "tooth": 35, "jaw": "lower", "site_method": "teeth",
                  "site_x": 24.0, "site_y": 24.0, "site_z": 24.0,
-                 "needs_implant": 1.0, "feasible": 0.0, "reason": "unmeasurable"})
+                 "needs_implant": 1.0, "feasible": 0.0, "reason": "unmeasurable",
+                 "available_height_mm": 8.0, "ridge_width_mm": 9.0})
     csv = tmp_path / "sites.csv"
     pd.DataFrame(rows).to_csv(csv, index=False)
     return cache, csv
 
 
-TARGETS = ["needs_implant", "feasible"]
+# One binary head plus two millimetre heads. `feasible` is no longer a target:
+# it is a rule applied to the millimetres at inference, so a threshold revision
+# is a re-score rather than five folds of retraining.
+TARGETS = ["needs_implant", "available_height_mm", "ridge_width_mm"]
 
 
 def make_cases(cache, csv):
@@ -75,8 +81,8 @@ class TestLabelsToCases:
     def test_labels_line_up_with_ids(self, world):
         cases = make_cases(*world)
         by_id = dict(zip(cases.ids, cases.y))
-        assert by_id["P1#36"][TARGETS.index("feasible")] == 0.0
-        assert by_id["P1#37"][TARGETS.index("feasible")] == 1.0
+        assert by_id["P1#36"][TARGETS.index("available_height_mm")] == 8.0
+        assert by_id["P1#37"][TARGETS.index("available_height_mm")] == 18.0
 
     def test_the_dataset_and_the_case_set_agree(self, world):
         """Training and explanation must see the same voxels, or an explanation
@@ -107,7 +113,7 @@ class TestCasesToAttribution:
                               **({"steps": 4, "batch_size": 1}
                                  if name == "integrated_gradients" else {}))
         volume = cases.load(cases.ids[0], torch.device("cpu"))
-        saliency = method.attribute(volume, TARGETS.index("feasible"))
+        saliency = method.attribute(volume, TARGETS.index("available_height_mm"))
         assert tuple(saliency.shape) == (PATCH, PATCH, PATCH)
         assert torch.isfinite(saliency).all()
 
@@ -151,6 +157,7 @@ class TestConfigsAgreeWithTheCode:
     def test_the_site_config_resolves_end_to_end(self):
         """Catches the class of bug where a config overrides one path and
         inherits another that no longer matches it."""
+        from src.data.taskdef import all_target_names
         from src.utils.config import load_config
         from src.xai.runner import model_img_size
 
@@ -159,9 +166,10 @@ class TestConfigsAgreeWithTheCode:
         assert cfg.preprocess.out_shape is None      # nothing is resampled
         assert str(cfg.train.out_dir).startswith(str(cfg.data.artifacts_dir))
         assert getattr(cfg.task, "sites_csv", None)
-        assert tuple(cfg.task.labels) == tuple(TARGETS)
+        assert tuple(all_target_names(cfg)) == tuple(TARGETS)
 
     def test_the_site_model_builds_at_the_configured_size(self):
+        from src.data.taskdef import all_target_names
         from src.models import build_model
         from src.utils.config import load_config
         from src.xai.runner import model_img_size
@@ -169,4 +177,4 @@ class TestConfigsAgreeWithTheCode:
         cfg = load_config("configs/sites.yaml")
         model = build_model(cfg.model, img_size=model_img_size(cfg))
         out = model(torch.zeros(2, 1, 96, 96, 96))
-        assert tuple(out.shape) == (2, len(cfg.task.labels))
+        assert tuple(out.shape) == (2, len(all_target_names(cfg)))

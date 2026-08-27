@@ -120,22 +120,62 @@ width measured a single cortical plate wherever a tooth was present (a 6.00 mm
 ridge measured 1.80 mm). Both change the labels, so nothing measured under
 v1.0.0 can be compared with anything measured after it. See `REPORT.md` C8c.
 
-| | v1.0.0 | v2.0.0 |
-|---|---|---|
-| `needs_implant` | 530 | 709 |
-| BCE floor | 1.2026 | 0.9145 |
-| AP floor | 0.0952 | 0.3404 |
+| | v1.0.0 | v2.0.0 | v3.0.0 |
+|---|---|---|---|
+| `needs_implant` | 530 | 709 | 709 |
+| feasibility | classified | classified | **regressed, thresholded at inference** |
+| floors | BCE 1.2026 | BCE 0.9145 | BCE 0.3348 + MAE 6.91 / 3.58 mm |
 
-v2.0.0 is a major bump rather than a patch for both reasons: the results are
-incomparable, and `ridge_width`, `run_through` and `site_is_occupied` changed
-signature.
+**v3.0.0** replaces the `feasible` classification head with two millimetre heads.
+`feasible` is now computed from the predictions and the config, so revising the
+12 mm rule is a re-score rather than five folds of retraining -- which matters,
+because that rule moves a third of the answers. Results are again incomparable
+with what came before, and the config schema, `predict`, and `Trainer` all
+changed signature.
+
+## What the model predicts
+
+| Head | Kind | Question |
+|---|---|---|
+| `needs_implant` | binary | Is this socket empty? |
+| `available_height_mm` | **millimetres** | How much bone is there, crest to canal? |
+| `ridge_width_mm` | **millimetres** | How wide is the ridge? |
+
+**`feasible` is not a label.** It is a rule applied to the two measurements, and
+it is applied at *inference*, from configuration:
+
+```
+feasible = available_height_mm >= 12.0 and ridge_width_mm >= 6.0
+```
+
+That matters because the threshold is the largest single lever in the project.
+Over the 709 mandibular sites that need an implant:
+
+```
+height rule 10 mm -> 266 infeasible (37.5%)
+height rule 12 mm -> 390 infeasible (55.0%)
+height rule 14 mm -> 503 infeasible (70.9%)
+```
+
+A 2 mm revision moves a third of the answers. As a classifier that revision costs
+five folds of retraining; predicting millimetres it costs a re-score, and
+`train.py` prints the whole sweep as a result rather than a risk. This is the
+project's own rule -- *thresholds are configuration, never code* -- applied to
+the model and not only to the label builder.
+
+It is also the more useful output: "14.3 mm of bone here" tells a clinician which
+fixture will fit, and stops the pipeline silently assuming a 10 mm one.
+
+`needs_implant` stays binary because it is occupancy, with no millimetre quantity
+underneath. Expect it to be easy -- "is there a tooth in this patch" is a simple
+visual task -- so a high AUROC there is a sanity check, not a finding.
 
 ## The three numbers to quote a result against
 
 ```
-BCE floor    0.9145     loss of a model that has learned nothing
-AUROC floor  0.500
-AP floor     0.3404     = mean prevalence
+needs_implant     BCE floor 0.3348   AUROC floor 0.500   AP floor 0.1045
+available_height  MAE floor 6.91 mm  RMSE floor 7.97 mm
+ridge_width       MAE floor 3.58 mm  RMSE floor 4.40 mm
 ```
 
 `train.py` prints the floor before the first epoch. **It moves with the label

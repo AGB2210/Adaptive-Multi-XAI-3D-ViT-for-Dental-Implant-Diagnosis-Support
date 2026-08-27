@@ -25,6 +25,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
+from src.train.targets import TargetSpec  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -32,7 +33,8 @@ from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.adaptive import EVAL_METRIC, WEIGHT_METRIC, fuse  # noqa: E402
 from src.xai.base import make_baseline  # noqa: E402
 from src.xai.calibration import apply_temperature  # noqa: E402
-from src.xai.runner import (  # noqa: E402
+from src.xai.runner import (
+    explanation_target,  # noqa: E402
     load_case_set,
     load_model,
     predict_case_logits,
@@ -91,7 +93,8 @@ def main() -> None:
     set_seed(cfg.seed, deterministic=args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model, _ = load_model(cfg, args.checkpoint, device)
+    model, ckpt = load_model(cfg, args.checkpoint, device)
+    spec = TargetSpec.from_state(ckpt.get("target_spec"))
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     art = artifacts_dir(cfg)
     figures = art / "figures" / "cases"
@@ -130,7 +133,7 @@ def main() -> None:
             i = index[pid]
             volume = cases.load(pid, device)
             baseline = make_baseline(volume, "blur")
-            target = int(np.argmax(probs[i]))
+            target = explanation_target(cfg, spec, probs[i])
 
             maps = {n: m.attribute(volume, target) for n, m in methods.items()}
             result = fuse(model, volume, maps, target, weight_metric=WEIGHT_METRIC,

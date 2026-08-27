@@ -19,18 +19,22 @@ def sites_frame(rows):
     return pd.DataFrame(rows)
 
 
+# `feasible` is kept in the fixture because the CSV still carries it -- the label
+# builder writes it, and the threshold-sensitivity work reads it. It is simply no
+# longer a training target; the millimetres are.
 BASE = dict(site_method="teeth", jaw="lower", site_x=20.0, site_y=20.0, site_z=20.0,
-            needs_implant=1.0, feasible=1.0, reason="ok")
+            needs_implant=1.0, feasible=1.0, reason="ok",
+            available_height_mm=18.0, ridge_width_mm=9.0)
 
 
 @pytest.fixture
 def csv(tmp_path):
     df = sites_frame([
         {**BASE, "patient_id": "A", "tooth": 36},
-        {**BASE, "patient_id": "A", "tooth": 37, "feasible": 0.0},
+        {**BASE, "patient_id": "A", "tooth": 37, "feasible": 0.0, "available_height_mm": 8.0},
         {**BASE, "patient_id": "B", "tooth": 36, "site_method": "sparse"},
         {**BASE, "patient_id": "B", "tooth": 37, "site_method": "opposite_jaw"},
-        {**BASE, "patient_id": "C", "tooth": 36, "feasible": np.nan},
+        {**BASE, "patient_id": "C", "tooth": 36, "feasible": np.nan, "available_height_mm": np.nan},
         {**BASE, "patient_id": "C", "tooth": 37, "site_x": np.nan},
         {**BASE, "patient_id": "D", "tooth": 16, "jaw": "upper"},
         {**BASE, "patient_id": "E", "tooth": 35, "feasible": 0.0,
@@ -158,12 +162,12 @@ class TestSitePatchDataset:
                          "site_y": 30.0, "site_z": 30.0})
         return cache, sites_frame(rows)
 
-    def test_yields_a_patch_and_two_targets(self, tmp_path):
+    def test_yields_a_patch_and_one_target_per_head(self, tmp_path):
         cache, sites = self.build(tmp_path)
         ds = SitePatchDataset(cache, sites, patch_size=16)
         x, y = ds[0]
         assert tuple(x.shape) == (1, 16, 16, 16)
-        assert tuple(y.shape) == (2,)
+        assert tuple(y.shape) == (3,)      # 1 binary + 2 millimetre heads
 
     def test_one_sample_per_site_not_per_scan(self, tmp_path):
         cache, sites = self.build(tmp_path, n_patients=3)

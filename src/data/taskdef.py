@@ -47,3 +47,24 @@ def external_dataset(cfg: SimpleNamespace) -> str | None:
     by learning its noise and field of view; this is the check that it did not.
     """
     return getattr(cfg.data, "external", None) or None
+
+
+def regression_names_for(cfg) -> list[str]:
+    """Millimetre targets, if this task has any.
+
+    Empty for the superseded detection task and for any pure-classification
+    config, which is what keeps those paths working unchanged.
+    """
+    task = getattr(cfg, "task", SimpleNamespace())
+    return list(getattr(task, "targets_mm", []) or [])
+
+
+def all_target_names(cfg) -> list[str]:
+    """Every output column, binary first then millimetres.
+
+    ORDER IS LOAD-BEARING. The model head, the loss, the standardiser and every
+    metric index into the same array by position; a head whose order disagrees
+    with the evaluator's reports one target's score under another's name and
+    nothing raises.
+    """
+    return label_names_for(cfg) + regression_names_for(cfg)

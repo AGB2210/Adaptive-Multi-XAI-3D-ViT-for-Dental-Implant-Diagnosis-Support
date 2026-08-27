@@ -159,3 +159,28 @@ def make_nifti(
     img.header.set_zooms(spacing)
     nib.save(img, str(path))
     return path
+
+
+def make_hybrid_dataset(n: int, seed: int = 0, shape=(32, 32, 32),
+                        n_binary: int = 1, n_mm: int = 2, rng_scale=(18.0, 10.0)):
+    """The planted-signal gate, with millimetre targets alongside binary ones.
+
+    The gate has to match the task it gates. It was fixed at six binary labels
+    once, then at whatever `n_labels` said, and a hybrid head needs continuous
+    targets for its regression columns or the gate trains a regression head on
+    zeros and ones and reports a meaningless MAE.
+
+    Each millimetre column is a LINEAR function of one planted binary signal,
+    scaled to a plausible clinical range. So the correct answer is learnable
+    from the image and the floor is the target's own spread -- exactly the
+    property that makes this a gate: a model that cannot beat the floor here
+    cannot beat it on real scans either.
+    """
+    x, y = make_dataset(n, seed=seed, shape=shape, n_labels=max(n_binary + n_mm, 1))
+    out = [y[:, :n_binary]]
+    for j in range(n_mm):
+        driver = y[:, (n_binary + j) % y.shape[1]]
+        centre = rng_scale[j % len(rng_scale)]
+        noise = np.random.default_rng(seed + 991 + j).normal(0.0, 0.8, size=len(y))
+        out.append((centre + 6.0 * driver + noise).astype(np.float32)[:, None])
+    return x, np.concatenate(out, axis=1).astype(np.float32)
