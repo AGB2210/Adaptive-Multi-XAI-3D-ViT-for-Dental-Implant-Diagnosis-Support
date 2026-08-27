@@ -27,12 +27,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    # 3.11 is the verified set in requirements.txt; 3.12 is what the team runs
+    # locally. A rented GPU box gives you whichever its image ships, so both
+    # have to stay green or the handoff breaks on someone else's machine.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python-version }}"
           cache: pip
 
       - name: Install dependencies
@@ -59,3 +67,38 @@ jobs:
 
       - name: Tests
         run: python -m pytest -q
+
+      - name: Every config resolves
+        # `train.out_dir` once inherited from default.yaml and dropped site
+        # checkpoints into the superseded detection task's directory. Nothing
+        # crashed; the run simply went to the wrong place. Loading each config
+        # and checking its paths agree is the cheapest guard against that class.
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          from src.utils.config import load_config
+          for p in sorted(Path("configs").glob("*.yaml")):
+              cfg = load_config(str(p))
+              art, out = str(cfg.data.artifacts_dir), str(cfg.train.out_dir)
+              assert out.startswith(art), f"{p.name}: out_dir {out} escapes artifacts_dir {art}"
+              print(f"{p.name:24} artifacts={art:24} out={out}")
+          EOF
+
+      - name: Training runs end to end on synthetic data
+        # Needs no cohort and no GPU. It exercises the seam that unit tests
+        # cannot: config -> loaders -> model -> loss -> metrics -> checkpoint.
+        # The synthetic gate once hard-coded six labels and broke the moment a
+        # two-output task was configured, and every unit test still passed.
+        run: |
+          python scripts/train.py --config configs/sites_smoke.yaml --synthetic
+          python - <<'EOF'
+          import json, sys
+          from src.utils.config import load_config
+          cfg = load_config("configs/sites_smoke.yaml")
+          m = json.load(open("artifacts_sites/runs/vit3d_synthetic/metrics.json"))
+          want = list(cfg.task.labels)
+          assert m["labels"] == want, f"trained {m['labels']}, config says {want}"
+          assert m["n_params"] > 0
+          assert set(m["val"]["per_label"]) == set(want)
+          print(f"ok: {len(want)} labels, {m['n_params']:,} parameters")
+          EOF

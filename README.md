@@ -107,7 +107,7 @@ upper tooth is lost the ridge resorbs, the sinus pneumatises, and ToothFairy3's
 annotation gap as a clinical verdict.
 
 Nothing important is lost: the inferior alveolar canal is annotated in **every**
-scan, and nerve clearance limits 289 of the 361 infeasible sites — which is both
+scan, and nerve clearance limits 311 of the 361 infeasible sites — which is both
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
 
@@ -122,6 +122,12 @@ AP floor     0.0952     = mean prevalence
 `train.py` prints the floor before the first epoch. **It moves with the label
 set** — the superseded three-label task's floor was 1.0652, and quoting it here
 would be a category error.
+
+## Running this on another machine
+
+**`RUNBOOK.md` is the instruction manual** — setup, the pre-flight gates, the
+full command sequence, what the numbers must be at each step, and what to send
+back. It is written for someone who has never seen this project. Start there.
 
 ## Before renting a GPU, run the smoke config
 
