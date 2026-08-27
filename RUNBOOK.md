@@ -46,7 +46,7 @@ this pipeline deliberately does *no* downsampling. Do not rent a box with a
 ## 2. Setup
 
 ```bash
-git clone https://github.com/AGB2210/Capstone.git capstone-code
+git clone https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
 cd capstone-code
 python -m venv .venv && source .venv/bin/activate
 ```
