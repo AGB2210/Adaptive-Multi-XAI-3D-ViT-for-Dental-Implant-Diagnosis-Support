@@ -111,6 +111,25 @@ scan, and nerve clearance limits 408 of the 478 infeasible sites — which is bo
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
 
+## Versions
+
+**Do not use v1.0.0.** It predates an audit that found two faults in the label
+builder, and the release tarball still contains them: occupancy matched teeth
+across jaws (414 mandibular sites were held by a maxillary tooth), and ridge
+width measured a single cortical plate wherever a tooth was present (a 6.00 mm
+ridge measured 1.80 mm). Both change the labels, so nothing measured under
+v1.0.0 can be compared with anything measured after it. See `REPORT.md` C8c.
+
+| | v1.0.0 | v2.0.0 |
+|---|---|---|
+| `needs_implant` | 530 | 709 |
+| BCE floor | 1.2026 | 0.9145 |
+| AP floor | 0.0952 | 0.3404 |
+
+v2.0.0 is a major bump rather than a patch for both reasons: the results are
+incomparable, and `ridge_width`, `run_through` and `site_is_occupied` changed
+signature.
+
 ## The three numbers to quote a result against
 
 ```
