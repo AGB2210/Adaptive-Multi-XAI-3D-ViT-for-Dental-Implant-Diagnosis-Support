@@ -92,13 +92,27 @@ jobs:
         run: |
           python scripts/train.py --config configs/sites_smoke.yaml --synthetic
           python - <<'EOF'
-          import json, sys
+          import json
+          from src.data.taskdef import all_target_names, label_names_for, regression_names_for
           from src.utils.config import load_config
           cfg = load_config("configs/sites_smoke.yaml")
           m = json.load(open("artifacts_sites/runs/vit3d_synthetic/metrics.json"))
-          want = list(cfg.task.labels)
+          want = all_target_names(cfg)
           assert m["labels"] == want, f"trained {m['labels']}, config says {want}"
           assert m["n_params"] > 0
-          assert set(m["val"]["per_label"]) == set(want)
-          print(f"ok: {len(want)} labels, {m['n_params']:,} parameters")
+          # metrics.json is nested by unit: binary heads carry AUROC and a
+          # threshold, millimetre heads carry MAE against a floor. Asserting one
+          # flat per_label block over both would pass only while the task stayed
+          # pure classification.
+          val = m["val"]
+          binary, mm = label_names_for(cfg), regression_names_for(cfg)
+          if binary:
+              assert set(val["classification"]["per_label"]) == set(binary)
+          if mm:
+              assert set(val["regression"]) == set(mm)
+              for name, r in val["regression"].items():
+                  assert "mae" in r and "mae_floor" in r, f"{name} has no floor to read against"
+              assert val["threshold_sensitivity"], "the threshold sweep was not produced"
+          print(f"ok: {len(binary)} binary + {len(mm)} millimetre heads, "
+                f"{m['n_params']:,} parameters")
           EOF
