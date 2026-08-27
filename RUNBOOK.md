@@ -53,10 +53,16 @@ this pipeline deliberately does *no* downsampling. Do not rent a box with a
 ## 2. Setup
 
 ```bash
-git clone https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
+git clone --branch v3.0.0 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
 cd capstone-code
 python -m venv .venv && source .venv/bin/activate
 ```
+
+**Clone the tag, not `main`.** Every expected number in this runbook was measured
+at v3.0.0. Earlier tags are a different task -- v1.0.0's labels are wrong and
+v2.0.0 classifies feasibility instead of measuring it -- so nothing here would
+match. If you need the newest work instead, use `main` and expect the checks
+below to have moved.
 
 On Windows the activate line is `.venv\Scripts\activate` instead.
 
@@ -96,13 +102,13 @@ Expect **532**.
 python -m pytest -q
 ```
 
-Expect `323 passed`.
+Expect `380 passed`.
 
 ```bash
 python scripts/check_imports.py
 ```
 
-Expect 49 modules.
+Expect 50 modules.
 
 ```bash
 python scripts/train.py --config configs/sites_smoke.yaml --synthetic

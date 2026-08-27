@@ -113,6 +113,13 @@ canal is a dark tube inside bone rather than a bright edge.
 
 ## Versions
 
+**v3.0.0 is current.** Clone the tag, not just `main`, if you want a state that
+matches this README exactly:
+
+```bash
+git clone --branch v3.0.0 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git
+```
+
 **Do not use v1.0.0.** It predates an audit that found two faults in the label
 builder, and the release tarball still contains them: occupancy matched teeth
 across jaws (414 mandibular sites were held by a maxillary tooth), and ridge
@@ -132,6 +139,12 @@ v1.0.0 can be compared with anything measured after it. See `REPORT.md` C8c.
 because that rule moves a third of the answers. Results are again incomparable
 with what came before, and the config schema, `predict`, and `Trainer` all
 changed signature.
+
+Three majors in a day is not inflation. Each marks a point where a number
+produced before it stops meaning the same thing as one produced after -- v2.0.0
+changed the labels, v3.0.0 changed what the model predicts -- and the floors move
+each time, which is the practical test of whether a comparison is legitimate.
+**Every number in the paper must carry the tag it was measured under.**
 
 ## What the model predicts
 
