@@ -46,7 +46,7 @@ this pipeline deliberately does *no* downsampling. Do not rent a box with a
 ## 2. Setup
 
 ```bash
-git clone <repo-url> capstone-code
+git clone https://github.com/AGB2210/Capstone.git capstone-code
 cd capstone-code
 python -m venv .venv && source .venv/bin/activate
 ```
