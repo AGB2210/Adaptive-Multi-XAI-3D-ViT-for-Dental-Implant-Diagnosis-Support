@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -36,12 +37,14 @@ from src.xai.faithfulness import (  # noqa: E402
     deletion_insertion,
     model_randomization_check,
 )
-from src.xai.runner import (  # noqa: E402
+from src.xai.runner import (
     load_case_set,
     load_model,
     require_prerequisites,
     resolve_fold,
+    select_cases,  # noqa: E402
     training_baselines,
+    xai_setting,
 )
 from src.xai.visualize import (  # noqa: E402
     agreement_heatmap,
@@ -64,9 +67,11 @@ def main() -> None:
     ap.add_argument("--dataset", default=None,
                     help="dataset name from the config; defaults to data.primary")
     ap.add_argument("--split", default="test")
-    ap.add_argument("--n-cases", dest="n_cases", type=int, default=20)
+    ap.add_argument("--n-cases", dest="n_cases", type=int, default=None,
+                    help="default comes from xai.faithfulness_cases in the config")
     ap.add_argument("--steps", type=int, default=100, help="deletion/insertion steps (~1%% each)")
-    ap.add_argument("--randomization-cases", dest="rand_cases", type=int, default=3)
+    ap.add_argument("--randomization-cases", dest="rand_cases", type=int, default=None,
+                    help="default comes from xai.randomization_cases in the config")
     ap.add_argument("--only-randomization", dest="only_randomization", action="store_true",
                     help="skip the deletion/insertion sweep and redo only the sanity check, "
                          "reusing the existing results_faithfulness.csv")
@@ -85,8 +90,9 @@ def main() -> None:
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     cases = load_case_set(cfg, args.split, dataset, fold=fold)
     ids, y, label_names = cases.ids, cases.y, cases.labels
-    ids, y = ids[: args.n_cases], y[: args.n_cases]
-    log.info("%s/%s: %d cases", dataset, args.split, len(ids))
+    n_cases = xai_setting(cfg, "faithfulness_cases", args.n_cases, 20)
+    log.info("%s/%s: %d cases available", dataset, args.split, len(ids))
+    ids, y = select_cases(ids, y, n_cases, cfg.seed, log)
 
     methods = build_ensemble(model, device, names=tuple(args.methods),
                              mean_volume=mean_volume, baselines=baselines)
@@ -94,7 +100,12 @@ def main() -> None:
     figures = art / "figures"
 
     rows, agreement_rows = [], []
-    for case_index, pid in enumerate([] if args.only_randomization else ids):
+    todo = [] if args.only_randomization else ids
+    # Progress, because this loop prints nothing for tens of minutes on CPU and
+    # a remote operator cannot tell a slow run from a hung one. The RUNBOOK sends
+    # someone else to run this on a rented box; silence there costs real money.
+    for case_index, pid in enumerate(todo):
+        started = time.perf_counter()
         volume = cases.load(pid, device)
         baseline = make_baseline(volume, "blur")
         mask = bone_mask(volume)
@@ -147,8 +158,13 @@ def main() -> None:
             agreement_heatmap(matrix, figures / f"agreement_spearman_{dataset}_{pid}.png",
                               "spearman", f"Inter-method agreement — {pid}")
 
-        if (case_index + 1) % 5 == 0:
-            log.info("%d/%d cases done", case_index + 1, len(ids))
+        # Every case, not every fifth. At `% 5` a 4-case run printed nothing at
+        # all between "cases selected" and the randomisation stage -- tens of
+        # minutes of silence that a remote operator cannot distinguish from a
+        # hang. The per-case time is also the only estimate available for how
+        # long the full run will take.
+        log.info("%d/%d cases done (%.1fs)", case_index + 1, len(todo),
+                 time.perf_counter() - started)
 
     faithfulness = pd.DataFrame(rows)
     if args.only_randomization:
@@ -173,10 +189,11 @@ def main() -> None:
     print("they cannot tell WHICH anatomy the saliency landed on.")
 
     # ---- model randomisation sanity check --------------------------------
-    log.info("model-randomisation sanity check on %d cases...", args.rand_cases)
+    rand_cases = xai_setting(cfg, "randomization_cases", args.rand_cases, 3)
+    log.info("model-randomisation sanity check on %d cases...", rand_cases)
     randomization = {}
     rand_rows = []
-    for pid in ids[: args.rand_cases]:
+    for pid in ids[:rand_cases]:
         volume = cases.load(pid, device)
         with torch.no_grad():
             target = int(np.argmax(torch.sigmoid(model(volume))[0].cpu().numpy()))

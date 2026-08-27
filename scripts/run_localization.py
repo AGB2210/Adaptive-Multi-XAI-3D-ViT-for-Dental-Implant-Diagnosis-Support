@@ -37,12 +37,13 @@ from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
-from src.xai.runner import (  # noqa: E402
+from src.xai.runner import (
     load_case_set,
     load_model,
     require_prerequisites,
     resolve_fold,
     training_baselines,
+    xai_setting,  # noqa: E402
 )
 from src.xai.site_masks import describe_coverage, patch_masks  # noqa: E402
 
@@ -75,9 +76,11 @@ def main() -> None:
                     help="score cases where the label equals this "
                          "(site task defaults to 0: sites that are NOT feasible, "
                          "because that is the verdict the nerve explains)")
-    ap.add_argument("--n-cases", dest="n_cases", type=int, default=20)
+    ap.add_argument("--n-cases", dest="n_cases", type=int, default=None,
+                    help="default comes from xai.localization_cases in the config")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
-    ap.add_argument("--ig-steps", dest="ig_steps", type=int, default=256)
+    ap.add_argument("--ig-steps", dest="ig_steps", type=int, default=None,
+                    help="default comes from xai.ig_steps in the config")
     ap.add_argument("--ig-batch", dest="ig_batch", type=int, default=4)
     ap.add_argument("--topk", type=float, default=0.001, help="fraction of voxels kept for IoU/Dice")
     args = ap.parse_args()
@@ -115,7 +118,8 @@ def main() -> None:
     methods = build_ensemble(
         model, device, names=tuple(args.methods),
         mean_volume=mean_volume, baselines=baselines,
-        integrated_gradients={"steps": args.ig_steps, "batch_size": args.ig_batch},
+        integrated_gradients={"steps": xai_setting(cfg, "ig_steps", args.ig_steps, 256),
+                              "batch_size": args.ig_batch},
         gradient_shap={"n_samples": 24, "batch_size": 4},
     )
 
@@ -144,6 +148,7 @@ def main() -> None:
     others = ["jawbone"] if is_sites else [n for n in labels if n != label]
 
     rows = []
+    no_structure = mask_failed = 0
     for i, (case_id, _row) in enumerate(selected, 1):
         pid = cases.patient_of(case_id)
         try:
@@ -158,6 +163,7 @@ def main() -> None:
                     target_spacing=cfg.preprocess.target_spacing,
                 )
         except Exception as exc:  # noqa: BLE001 - one bad mask must not lose the run
+            mask_failed += 1
             log.error("%s: mask failed (%s) -- skipped", case_id, exc)
             continue
 
@@ -165,6 +171,7 @@ def main() -> None:
             # No canal inside this patch. Anterior mandibular sites genuinely
             # have none, and scoring them against an empty mask would divide by
             # a zero-size target rather than report a miss.
+            no_structure += 1
             log.warning("%s: no %s in this patch -- skipped", case_id, primary)
             continue
 
@@ -209,6 +216,19 @@ def main() -> None:
     print(f"enrichment 1.0 = chance;  the {primary} mask is {chance:.5%} of the patch")
     print("=" * 78)
     print(agg.round(4).to_string())
+
+    # The denominator belongs beside the result. This metric is UNDEFINED where
+    # the structure is not in the patch -- anterior mandibular sites genuinely
+    # have no canal above them -- and quoting a mean over the cases where it
+    # happened to be defined, without saying how many those were, overstates the
+    # coverage of the only annotation-grounded number in the project.
+    attempted = len(selected)
+    print()
+    print(f"scored on {attempted - no_structure - mask_failed}/{attempted} selected cases: "
+          f"{no_structure} had no {primary} inside the patch, {mask_failed} had no usable mask.")
+    if attempted and no_structure / attempted > 0.25:
+        print(f"  NOTE: {no_structure / attempted:.0%} of cases could not be scored. Report that "
+              f"fraction with any enrichment figure taken from this table.")
 
     for other in others:
         col, present = f"vs_{other}", df[f"present_{other}"]

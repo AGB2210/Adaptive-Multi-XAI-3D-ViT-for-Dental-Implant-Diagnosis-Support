@@ -29,6 +29,7 @@ patches per scan would triple the space for no additional information.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -53,6 +54,49 @@ from src.utils.log import get_logger  # noqa: E402
 log = get_logger("site_cache")
 
 SETTINGS = "_cache_settings.json"
+
+
+def cache_settings(cfg) -> dict:
+    """Everything that changes what a cached array CONTAINS.
+
+    Not what it is named or how many of them there are -- what a downstream read
+    would silently get wrong. Spacing, clip window and air threshold all rewrite
+    the voxels.
+    """
+    return {
+        "clip_window": list(cfg.preprocess.clip_window),
+        "air_threshold": float(getattr(cfg.preprocess, "air_threshold", -500.0)),
+        "target_spacing": getattr(cfg.preprocess, "target_spacing", None),
+        "native_resolution": True,
+        "orientation": "label frame, z flipped by anatomy; NOT canonical RAS+",
+    }
+
+
+def check_settings(out_dir: Path, cfg, force: bool) -> dict:
+    """Refuse to add to a cache that was built with different settings.
+
+    A cache is resumable, which means a changed config produces a directory half
+    in one format and half in another -- and the build prints a success line
+    either way. That is bug #14 in REPORT.md: a run trained on stale volumes and
+    nothing said a word. The guard was written for the 128^3 cache and its
+    constant was carried over here without the code, so this directory was
+    unprotected right up until the 52 GB build it most applies to.
+    """
+    settings = cache_settings(cfg)
+    path = out_dir / SETTINGS
+    if path.is_file() and not force:
+        old = json.loads(path.read_text())
+        drift = {k: (old.get(k), v) for k, v in settings.items() if old.get(k) != v}
+        if drift:
+            lines = "\n".join(
+                f"  {k}: cached {o!r} -> config {n!r}" for k, (o, n) in drift.items())
+            raise SystemExit(
+                f"{out_dir} was built with different settings:\n{lines}\n"
+                "Resuming would mix two formats in one directory. Rebuild with "
+                "--force, or point cache_dir somewhere else."
+            )
+    path.write_text(json.dumps(settings, indent=2, sort_keys=True))
+    return settings
 
 
 def normalise(volume: np.ndarray, clip_window, air_threshold: float):
@@ -98,6 +142,7 @@ def main() -> None:
 
     out_dir = cache_dir(cfg, dataset)
     out_dir.mkdir(parents=True, exist_ok=True)
+    check_settings(out_dir, cfg, args.force)
 
     clip_window = tuple(cfg.preprocess.clip_window)
     air = float(getattr(cfg.preprocess, "air_threshold", -500.0))
@@ -122,11 +167,23 @@ def main() -> None:
         try:
             # The flip is decided by the MASK's anatomy and applied to the image,
             # so both end up in the frame the site coordinates were measured in.
-            sign = superior_sign(np.asarray(nib.load(str(mask_file)).dataobj))
+            mask = np.asarray(nib.load(str(mask_file)).dataobj)
+            sign = superior_sign(mask)
 
             img = nib.load(str(image_file))
             spacing = np.asarray(img.header.get_zooms()[:3], dtype=float)
             volume = np.asarray(img.dataobj, dtype=np.float32)
+
+            # site_x/y/z were measured on the MASK and are indexed into the
+            # IMAGE. In nnU-Net layout the two normally match -- and "normally"
+            # is how one scan ends up sampling confidently from the wrong
+            # anatomy with nothing downstream noticing, because the patch still
+            # looks like a jaw.
+            if volume.shape != mask.shape:
+                raise ValueError(
+                    f"image {volume.shape} and mask {mask.shape} disagree; site "
+                    f"coordinates are measured on the mask and read from the image"
+                )
             np.nan_to_num(volume, copy=False, nan=air, posinf=air, neginf=air)
             if sign == -1:
                 volume = volume[:, :, ::-1]

@@ -22,6 +22,7 @@ from src.data.dataset import load_label_matrix, restrict_to_cache
 from src.data.site_dataset import (
     cut_patch,
     load_sites,
+    patch_centre,
     restrict_sites_to_cache,
     target_matrix,
 )
@@ -235,10 +236,8 @@ class CaseSet:
         if row is None:
             raise KeyError(f"{case_id!r} is not in this case set")
         volume = self._volume(row["patient_id"])
-        z = row.get("site_z", np.nan)
-        if not np.isfinite(z):
-            z = volume.shape[2] / 2.0
-        patch = cut_patch(volume, (row["site_x"], row["site_y"], z), int(self.patch_size))
+        centre = patch_centre(row, volume.shape, int(self.patch_size))
+        patch = cut_patch(volume, centre, int(self.patch_size))
         arr = np.asarray(patch, dtype=np.float32)
         return torch.from_numpy(np.ascontiguousarray(arr))[None, None].to(device)
 
@@ -343,3 +342,57 @@ def predict_case_logits(model, cases: CaseSet, device, batch_size: int = 8) -> n
                            for i in cases.ids[start : start + batch_size]])
         out.append(model(batch).cpu().numpy())
     return np.concatenate(out) if out else np.zeros((0, 0))
+
+
+def xai_setting(cfg, key: str, cli_value, fallback):
+    """Sample size for an XAI run: CLI flag, else `xai:` in the config, else a
+    small fallback that finishes on a laptop.
+
+    The config block existed for a whole release and NOTHING READ IT. Every
+    script used its own argparse default, so `configs/sites.yaml` asking for 200
+    GradientSHAP samples and 30 randomisation cases silently delivered 24 and 3.
+    24 is the setting whose relative standard error was measured at 0.5689 --
+    the estimate had not converged and its numbers were not quotable -- and the
+    config comment says exactly that, three lines above the value being ignored.
+
+    A config value that is never read is worse than no config value: it reads as
+    a decision that was made and honoured.
+    """
+    if cli_value is not None:
+        return cli_value
+    block = getattr(cfg, "xai", None)
+    if block is not None:
+        value = getattr(block, key, None)
+        if value is not None:
+            return value
+    return fallback
+
+
+def select_cases(ids, y, n: int, seed: int, log=None):
+    """Take `n` cases at random, with a fixed seed, and say how many patients.
+
+    Head-truncation (`ids[:n]`) is not a sample. The case list comes out of the
+    CSV in (patient, tooth) order and a patient contributes ~14 mandibular
+    sites, so the default n=20 was TWO PATIENTS -- one jaw, one field of view,
+    one scanner session, 20 times over. Any interval computed across them
+    measures within-patient repeatability and reports it as between-patient
+    uncertainty.
+
+    Sampling fixes which cases are drawn. It does not make them independent:
+    several sites still come from one jaw, so anything bootstrapped over the
+    result must resample PATIENTS, not rows. `patients_of` is what the callers
+    pass to the bootstrap for that.
+    """
+    n = min(int(n), len(ids))
+    idx = np.random.default_rng(seed).choice(len(ids), size=n, replace=False)
+    idx.sort()                        # keep CSV order for readable output
+    ids = [ids[i] for i in idx]
+    y = y[idx]
+    if log is not None:
+        log.info("%d cases across %d patients", len(ids), len(set(patients_of(ids))))
+    return ids, y
+
+
+def patients_of(ids) -> list[str]:
+    """Patient for each case id, for clustering a bootstrap by patient."""
+    return [str(i).split(SITE_SEP)[0] for i in ids]

@@ -29,3 +29,19 @@ train:
   batch_size: 2
   accum_steps: 1
   epochs: 1
+
+xai:
+  # Deliberately tiny, and NOTHING MEASURED UNDER THEM IS A RESULT. The point of
+  # this config is exit codes: does the pipeline run end to end on real scans.
+  #
+  # These have to be stated rather than inherited. Before the `xai:` block was
+  # wired up, every script fell back to its own argparse default and the smoke
+  # run happened to be cheap by accident. Now that the config is read, inheriting
+  # sites.yaml would pull in 200-sample GradientSHAP and a 30-case randomisation
+  # cascade -- correct for a result, hours on a 4 GB laptop.
+  faithfulness_cases: 4
+  localization_cases: 4
+  adaptive_cases: 4
+  randomization_cases: 2
+  shap_samples: 8
+  ig_steps: 16

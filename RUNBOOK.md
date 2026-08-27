@@ -153,10 +153,17 @@ python -c "from src.data.site_dataset import load_sites; d=load_sites('artifacts
 
 ```
 6787 sites 486 patients
-530 need an implant | 327 not feasible
+709 need an implant | 413 not feasible
 ```
 
 If these differ, something changed upstream. Do not continue — report it.
+
+These numbers moved once already, and the reason is worth knowing before you
+trust them. An audit found occupancy was decided by centroid distance computed
+as `hypot(dx, dy)` -- with z absent -- over teeth from BOTH jaws, so an upper
+molar directly above a lower site claimed it. 414 mandibular sites were marked
+occupied by a maxillary tooth while their own tooth was missing from the mask.
+Occupancy is now a label lookup and `needs_implant` went 530 -> 709.
 
 ### 4b. Build the cache — 2–4 h, CPU-bound, ~52 GB
 
@@ -182,7 +189,18 @@ Then pool them, so every case is predicted once by a model that never saw it:
 python scripts/pool_cv.py --config configs/sites.yaml --folds 5
 ```
 
-### 4d. Explainability — 1–2 h
+### 4d. Explainability
+
+Sample sizes come from the `xai:` block in `configs/sites.yaml` — 200 cases, 200
+GradientSHAP samples, 30 randomisation cases. **Do not pass `--n-cases` or
+`--shap-samples` to shrink them**; those are the sizes that make a claim.
+GradientSHAP at 24 samples measured a relative standard error of 0.5689, which
+is not a result, and `run_xai` will warn you if it drops below 128.
+
+Budget from a measured rate: faithfulness ran **47 s per case on CPU** at smoke
+scale, so 200 cases is ~2.6 h on CPU and considerably less on the GPU. Every
+script now logs `N/M cases done` with a per-case time, so you can extrapolate
+after the first case rather than guessing.
 
 All five use fold 0's checkpoint.
 
@@ -217,23 +235,27 @@ it is slower.
 scores exactly this**, so compare against it and never against zero:
 
 ```
-BCE floor    1.2026
+BCE floor    0.9145      macro, with pos_weight applied
 AUROC floor  0.500
-AP floor     0.0952
+AP floor     0.3404      = mean prevalence
 ```
 
 | What you see | What it means |
 |---|---|
-| Val loss stuck near **1.2026** | learned nothing. Not a bug — a result. Report it |
+| Val loss stuck near **0.9145** | learned nothing. Not a bug — a result. Report it |
 | Macro AUROC CI **includes 0.500** | indistinguishable from chance. Say so plainly |
 | AUROC above 0.5 with a CI that excludes it | a real signal |
 
-The floor **moves with the label set**. The superseded three-label task's floor
-was 1.0652, and quoting that here would be a category error.
+The floor **moves with the label set**, and it moved when the audit fixes
+changed the labels: it was 1.2026 before, and the superseded three-label task's
+was 1.0652. Quoting any of them against another is a category error. `train.py`
+solves for the current one and prints it; use what it prints.
 
-`needs_implant` has 7.8% prevalence and `feasible` 11.2%. **Accuracy is
-meaningless at this imbalance** — always quote AUROC and AP with their
-confidence intervals.
+`needs_implant` has 10.4% prevalence; `feasible` has 57.6%. **Accuracy is
+meaningless on `needs_implant`** — always quote AUROC and AP with confidence
+intervals. Those intervals must be **bootstrapped over patients, not rows**: one
+jaw contributes ~14 sites, so resampling rows measures within-patient
+repeatability and reports it as between-patient uncertainty.
 
 ---
 

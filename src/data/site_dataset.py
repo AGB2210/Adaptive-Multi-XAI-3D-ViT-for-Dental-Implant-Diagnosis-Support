@@ -96,6 +96,37 @@ def target_matrix(df: pd.DataFrame, targets=SITE_TARGETS) -> np.ndarray:
     return df[list(targets)].to_numpy(dtype=np.float32)
 
 
+
+def patch_centre(row, volume_shape, patch_size: int):
+    """Where the model's input box is centred, for one site.
+
+    ONE function because training and explanation must agree voxel for voxel. If
+    they drift, an attribution map describes an input the model never saw and
+    every number downstream still looks reasonable.
+
+    The box is pushed off-centre toward the structure that decides the answer.
+    Centred, 96^3 at 0.3 mm reaches 14.4 mm below the crest against a 12.0 mm
+    threshold -- 2.4 mm of margin, with 26.2% of sites needing an implant having
+    their limiting structure outside the input entirely -- while half the box sat
+    above the crest on air, soft tissue and opposing crowns. Quarter-shifted it
+    reaches 21.6 mm below and 7.2 mm above.
+
+    The nerve lies BELOW the crest in the mandible (`measure_site` computes
+    crest - canal_top) and the sinus ABOVE it in the maxilla, so the sign follows
+    the jaw.
+    """
+    def field(name, default=np.nan):
+        return row[name] if not hasattr(row, "get") else row.get(name, default)
+
+    z = float(field("site_z"))
+    if not np.isfinite(z):
+        return (float(field("site_x")), float(field("site_y")), volume_shape[2] / 2.0)
+    shift = patch_size // 4
+    jaw = field("jaw", "lower")
+    z = z - shift if jaw == "lower" else z + shift
+    return (float(field("site_x")), float(field("site_y")), z)
+
+
 def cut_patch(volume: np.ndarray, centre, size: int, pad_value: float = 0.0) -> np.ndarray:
     """A `size`^3 box centred on `centre`, zero-padded where it leaves the scan.
 
@@ -167,11 +198,21 @@ class SitePatchDataset(Dataset):
         volume = self.volume(row.patient_id)
 
         # z comes from the crest so the box straddles the ridge rather than
-        # sitting wherever the arch fit happened to put it.
-        z = row.get("site_z", np.nan)
-        if not np.isfinite(z):
-            z = volume.shape[2] / 2.0
-        patch = cut_patch(volume, (row.site_x, row.site_y, z), self.patch_size)
+        # sitting wherever the arch fit happened to put it -- then it is pushed
+        # OFF-CENTRE, toward the structure that decides the answer.
+        #
+        # Centred, a 96^3 box at 0.3 mm reaches 14.4 mm below the crest against a
+        # 12.0 mm threshold: 2.4 mm of margin, with 26.2% of sites needing an
+        # implant having available height beyond 14.4 mm, i.e. their limiting
+        # structure outside the input entirely. The other half of the box was
+        # spent above the crest on air, soft tissue and opposing crowns.
+        #
+        # Quarter-shifted it reaches 21.6 mm below and 7.2 mm above. The nerve
+        # lies BELOW the crest in the mandible (measure_site computes
+        # crest - canal_top) and the sinus ABOVE it in the maxilla, so the sign
+        # follows the jaw.
+        centre = patch_centre(row, volume.shape, self.patch_size)
+        patch = cut_patch(volume, centre, self.patch_size)
         patch = np.asarray(patch, dtype=np.float32)
 
         if self.augment is not None:

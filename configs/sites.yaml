@@ -33,7 +33,7 @@ task:
   # the model to reproduce an annotation gap as a clinical verdict.
   #
   # Nothing important is lost. The inferior alveolar canal is annotated in every
-  # scan, and nerve clearance limits 289 of the 361 infeasible mandibular sites
+  # scan, and nerve clearance limits 408 of the 478 infeasible mandibular sites
   # -- which is precisely the question an explanation should be able to answer.
   site_jaws: [lower]
 
@@ -91,6 +91,31 @@ train:
   # molars in train and their right molars in test, which reads as
   # generalisation and is not.
   group_by: patient_id
+
+augment:
+  # THIS BLOCK EXISTS TO TURN TWO INHERITED AUGMENTATIONS OFF.
+  #
+  # flip_lr: default.yaml was written for the 128^3 cache, which was reoriented
+  # to RAS+ by nib.as_closest_canonical, so axis 0 was reliably left-right and a
+  # sagittal mirror was anatomically sane. The site cache deliberately does NOT
+  # reorient -- it keeps the label's own frame and applies only a z flip -- so
+  # axis 0 is whatever the scan stored. On any scan where that is
+  # anterior-posterior, `vol[::-1]` is an A-P mirror: anatomy that cannot occur
+  # in a patient, with the mental foramen on the wrong side. The augmentation
+  # docstring forbids exactly this. Off until the axis is read per scan from the
+  # affine and recorded in the cache manifest.
+  flip_lr_prob: 0.0
+  # rotate: ndimage.rotate(order=1) resamples with linear interpolation, which
+  # blurs the native 0.3 mm detail that is the entire reason this task runs at
+  # native resolution and pays 52 GB of cache for it. At rotate_prob 0.5 that
+  # was half of every batch. Small rotations are also the slowest thing in the
+  # loader, which makes the CPU the bottleneck rather than the GPU.
+  rotate_deg: 0.0
+  rotate_prob: 0.0
+  # Kept: translation and intensity. Translation is what stops the model keying
+  # on absolute position within the patch, which matters more here than it did
+  # on whole heads, because every patch is cut to the same anatomy by
+  # construction.
 
 xai:
   # Sample sizes set by what makes a claim, not by what finished overnight on a

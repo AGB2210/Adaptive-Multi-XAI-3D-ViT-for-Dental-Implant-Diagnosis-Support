@@ -90,20 +90,27 @@ class TestOrientation:
 class TestRunThrough:
     def test_measures_the_run_containing_the_index(self):
         line = np.array([0, 1, 1, 1, 0, 1, 0], dtype=bool)
-        assert run_through(line, 2) == 3
+        assert run_through(line, 2) == (3, False)
 
     def test_falls_back_to_the_nearest_run_when_the_index_is_off_bone(self):
         """An arch position estimated from surrounding anatomy can sit a voxel or
         two off the bone without the site being unmeasurable."""
         line = np.array([0, 1, 1, 1, 0, 0, 0], dtype=bool)
-        assert run_through(line, 5) == 3
+        assert run_through(line, 5) == (3, True)
+
+    def test_the_fallback_is_reported_not_taken_silently(self):
+        """This fallback is how a bone-only slab came to measure one cortical
+        plate and call a 6 mm ridge 1.8 mm. Whenever it fires, the site carries
+        width_fallback=True so the failure is visible in the CSV."""
+        assert run_through(np.array([0, 1, 1, 0], dtype=bool), 3)[1] is True
+        assert run_through(np.array([0, 1, 1, 0], dtype=bool), 1)[1] is False
 
     def test_empty_line_is_zero_not_an_error(self):
-        assert run_through(np.zeros(7, dtype=bool), 3) == 0
+        assert run_through(np.zeros(7, dtype=bool), 3) == (0, False)
 
     def test_does_not_bridge_a_gap(self):
         line = np.array([1, 1, 0, 1, 1, 1], dtype=bool)
-        assert run_through(line, 0) == 2
+        assert run_through(line, 0) == (2, False)
 
 
 class TestCylinder:
@@ -165,18 +172,41 @@ class TestOccupancy:
         m = blank()
         m[18:23, 18:23, 40:60] = 36
         cents = tooth_centroids(m)
-        out = site_is_occupied(m, (20, 20, 50), SPACING, cents)
+        out = site_is_occupied(m, (20, 20, 50), SPACING, cents, tooth=36)
         assert out["occupied"] and out["by"] == "tooth" and out["tooth_id"] == 36
 
     def test_a_neighbouring_tooth_does_not(self):
-        """The bug this guards: in a single-tooth gap the neighbours are ~3.5 mm
-        away, so any cylinder wide enough to see the site clips them. Counting
-        voxels found ONE empty site in 25 scans."""
+        """In a single-tooth gap the neighbours sit ~3.5 mm away. Site 36 is
+        empty here; only tooth 37 is annotated, and 37 is not 36."""
         m = blank()
         m[30:35, 18:23, 40:60] = 37        # a whole tooth-width away
         cents = tooth_centroids(m)
-        out = site_is_occupied(m, (20, 20, 50), SPACING, cents)
+        out = site_is_occupied(m, (20, 20, 50), SPACING, cents, tooth=36)
         assert not out["occupied"], "a neighbour must not occupy this site"
+
+    def test_the_opposing_tooth_in_the_OTHER_jaw_does_not_occupy_it(self):
+        """The bug that made this a label lookup. Occupancy scored centroid
+        distance as hypot(dx, dy) -- no z -- over centroids from both jaws, so
+        upper 26, sitting directly above lower 36, landed ~0 mm away and claimed
+        the site. 414 mandibular sites (6.9%) were marked occupied by a
+        maxillary tooth while their own tooth was absent from the mask: real
+        implant needs labelled as no need, in a positive class of 530."""
+        m = blank()
+        m[18:23, 18:23, 70:90] = 26        # upper counterpart, directly above
+        cents = tooth_centroids(m)
+        out = site_is_occupied(m, (20, 20, 50), SPACING, cents, tooth=36)
+        assert not out["occupied"], "an opposing tooth in the other jaw occupied the site"
+
+    def test_a_site_whose_own_tooth_is_annotated_elsewhere_is_still_occupied(self):
+        """The label is the answer; the fitted arch position only reports how
+        far off it was. A present tooth is present even if the polynomial put
+        the site a few millimetres from its centroid."""
+        m = blank()
+        m[26:31, 18:23, 40:60] = 36        # ~2 mm from the fitted position
+        cents = tooth_centroids(m)
+        out = site_is_occupied(m, (20, 20, 50), SPACING, cents, tooth=36)
+        assert out["occupied"] and out["tooth_id"] == 36
+        assert out["occupancy_mm"] > 0
 
     def test_a_bridge_pontic_filling_the_gap_occupies_it(self):
         m = blank()

@@ -61,6 +61,11 @@ TEETH = UPPER_TEETH + LOWER_TEETH
 
 JAW_LABEL = {"lower": LOWER_JAW, "upper": UPPER_JAW}
 
+# Every tooth label, as an array for np.isin. The ridge cross-section is bone
+# plus whatever the bone is holding: a root is a separate class, so a bone-only
+# slab has a hole exactly where an occupied site gets probed.
+TOOTH_LABELS = np.array(TEETH + THIRD_MOLARS, dtype=np.int64)
+
 
 def label_stats(mask: np.ndarray) -> dict:
     """{label: {"count": int, "centroid": (x, y, z)}} for every non-zero label.
@@ -218,6 +223,7 @@ class SiteMeasurement:
     ridge_width_mm: float          # bucco-lingual bone thickness below the crest
     limiting_structure: str        # "nerve" | "sinus" | "bone_extent" | "no_bone"
     n_bone_voxels: int             # support for the measurement; 0 means no bone
+    width_fallback: bool = False   # width probe missed and took the nearest run
 
     def as_row(self) -> dict:
         return asdict(self)
@@ -344,10 +350,10 @@ def measure_site(
             # The sinus sits above the crest; usable bone stops at its floor.
             limiter, height = "sinus", (sinus_floor - crest) * spacing[2]
 
-    width = ridge_width(mask, centre, crest, jaw, spacing,
-                        probe_mm=width_probe_mm, search_mm=width_search_mm)
+    width, width_fallback = ridge_width(mask, centre, crest, jaw, spacing,
+                                       probe_mm=width_probe_mm, search_mm=width_search_mm)
     return SiteMeasurement(jaw, float(crest * spacing[2]), float(max(height, 0.0)),
-                           float(width), limiter, n_bone)
+                           float(width), limiter, n_bone, bool(width_fallback))
 
 
 def ridge_width(mask, centre, crest_z: int, jaw: str, spacing,
@@ -361,28 +367,49 @@ def ridge_width(mask, centre, crest_z: int, jaw: str, spacing,
     The thickness reported is the SHORTER of the two in-plane runs through the
     point: the ridge is long in the direction it runs and thin across it, and
     which axis that is depends on where round the arch the site sits.
+
+    THE SLAB IS BONE PLUS TOOTH, NOT BONE ALONE. A root is a separate label, so
+    a bone-only slab has a hole exactly where an occupied site is probed. The
+    centre voxel then fails the test, `run_through` falls back to the nearest
+    run, and what gets measured is ONE CORTICAL PLATE in isolation. On a ridge
+    6.00 mm wide that returned 1.80 mm.
+
+    It was not a rare edge case. It fired on every occupied site, which is 92%
+    of the cohort, and the CSV showed the signature plainly: median width
+    3.00 mm where a tooth was present against 11.10 mm where one was missing --
+    backwards, since a site that has been edentulous for years has resorbed and
+    a site with a healthy tooth has not. `feasible` was being set by the
+    presence of a root rather than by anatomy, which entangled it with
+    `needs_implant`, the one label it was designed to be independent of.
+
+    Returns (width_mm, fell_back). `fell_back` is True when the probe missed
+    every run and the nearest one was measured instead; it is recorded per site
+    so this class of failure is visible in the CSV rather than silent.
     """
     spacing = check_spacing(spacing)
     step = max(1, int(round(probe_mm / spacing[2])))
     z = crest_z - step if jaw == "lower" else crest_z + step
     if not (0 <= z < mask.shape[2]):
-        return float("nan")
+        return float("nan"), False
 
     sub, c = crop_around(mask[:, :, z:z + 1], centre, search_mm, spacing)
     if sub.size == 0:
-        return float("nan")
-    slab = sub[:, :, 0] == JAW_LABEL[jaw]
+        return float("nan"), False
+    plane = sub[:, :, 0]
+    slab = (plane == JAW_LABEL[jaw]) | np.isin(plane, TOOTH_LABELS)
     if not slab.any():
-        return 0.0
+        return 0.0, False
 
     cx = int(np.clip(c[0], 0, slab.shape[0] - 1))
     cy = int(np.clip(c[1], 0, slab.shape[1] - 1))
-    widths = []
+    widths, fell_back = [], False
     for line, index, mm in ((slab[:, cy], cx, spacing[0]),
                             (slab[cx, :], cy, spacing[1])):
         if line.any():
-            widths.append(float(run_through(line, index) * mm))
-    return min(widths) if widths else 0.0
+            run, missed = run_through(line, index)
+            fell_back = fell_back or missed
+            widths.append(float(run * mm))
+    return (min(widths) if widths else 0.0), fell_back
 
 
 def run_through(line: np.ndarray, index: int) -> int:
@@ -390,14 +417,18 @@ def run_through(line: np.ndarray, index: int) -> int:
 
     If `index` is not inside a run, the nearest run is measured instead: an arch
     position estimated from surrounding anatomy can sit a voxel or two off the
-    bone without the site being unmeasurable. Returns 0 only when the line is
-    entirely empty.
+    bone without the site being unmeasurable. That fallback is also how a
+    bone-only slab came to measure a single cortical plate, so it is reported
+    rather than taken silently.
+
+    Returns (length, fell_back). Length is 0 only when the line is empty.
     """
     n = len(line)
     if n == 0 or not line.any():
-        return 0
+        return 0, False
     index = int(np.clip(index, 0, n - 1))
-    if not line[index]:
+    fell_back = not line[index]
+    if fell_back:
         hits = np.where(line)[0]
         index = int(hits[np.argmin(np.abs(hits - index))])
 
@@ -407,7 +438,7 @@ def run_through(line: np.ndarray, index: int) -> int:
     hi = index
     while hi < n - 1 and line[hi + 1]:
         hi += 1
-    return hi - lo + 1
+    return hi - lo + 1, fell_back
 
 
 def tooth_centroids(mask: np.ndarray, stats: dict | None = None) -> dict:
@@ -421,8 +452,7 @@ def tooth_centroids(mask: np.ndarray, stats: dict | None = None) -> dict:
     return {t: stats[t]["centroid"] for t in TEETH + THIRD_MOLARS if t in stats}
 
 
-def site_is_occupied(mask, centre, spacing, centroids=None,
-                     tooth_reach_mm: float = 4.0,
+def site_is_occupied(mask, centre, spacing, centroids=None, tooth: int = 0,
                      restoration_radius_mm: float = 2.0,
                      min_restoration_voxels: int = 200) -> dict:
     """Is there already a tooth or a restoration at this position?
@@ -433,12 +463,24 @@ def site_is_occupied(mask, centre, spacing, centroids=None,
     which keeps the label objective rather than turning on whether a dentist
     would have preferred an implant to the bridge already there.
 
-    TEETH ARE MATCHED BY CENTROID, NOT BY CONTACT. In a single-tooth gap the
-    neighbours sit only ~3.5 mm away, so any cylinder wide enough to see the site
-    also clips them. Counting voxels called every gap occupied and found ONE
-    empty site in 25 scans. A tooth centred here has its centroid within a
-    few millimetres; a neighbour's is a whole tooth-width away, so centroid
-    distance separates them cleanly and voxel contact does not.
+    A SITE IS HELD BY ITS OWN TOOTH, AND NOTHING ELSE ANSWERS THAT QUESTION.
+    ToothFairy3 numbers every tooth individually, so site 36 is occupied exactly
+    when label 36 is present. Pass `tooth` and the test is a dict lookup with no
+    geometry in it at all.
+
+    The geometric predecessor was wrong in a way that took a cross-check against
+    the raw masks to see. It scored centroid distance with
+    `np.hypot(dx, dy)` -- z absent -- over centroids from BOTH jaws. An upper
+    molar sits directly above its lower counterpart, so it landed ~0 mm away and
+    claimed the site. 414 mandibular sites, 6.9%, were marked occupied by a
+    maxillary tooth; spot-checking four against the masks, the site's own lower
+    tooth was absent in all four. Those were real implant needs labelled as no
+    need at all -- false negatives in a positive class of 530.
+
+    Adding the z term would not have been enough either. It would have fixed the
+    cross-jaw case and left the in-jaw one: the fitted arch position carries a
+    residual, and a neighbour ~5.3 mm away can beat a 4.0 mm reach. The label
+    exists; measuring a distance to infer it was the mistake.
 
     Restorations keep the volume test, since a bridge pontic has no meaningful
     centroid of its own -- the mask spans several sites at once -- but it does
@@ -450,16 +492,15 @@ def site_is_occupied(mask, centre, spacing, centroids=None,
     if centroids is None:
         centroids = tooth_centroids(mask)
 
-    # 1. A tooth whose centre of mass is at this site.
-    best_id, best_d = 0, float("inf")
-    for tid, c in centroids.items():
+    # 1. The site's own tooth, by label. `occupancy_mm` is how far that tooth's
+    #    centroid sits from the fitted arch position -- reported for QA of the
+    #    arch fit, never used to decide anything.
+    if tooth and int(tooth) in centroids:
+        c = centroids[int(tooth)]
         d = float(np.hypot((c[0] - float(centre[0])) * spacing[0],
                            (c[1] - float(centre[1])) * spacing[1]))
-        if d < best_d:
-            best_id, best_d = tid, d
-    if best_d <= tooth_reach_mm:
-        return {"occupied": True, "by": "tooth", "tooth_id": int(best_id),
-                "occupancy_mm": best_d}
+        return {"occupied": True, "by": "tooth", "tooth_id": int(tooth),
+                "occupancy_mm": d}
 
     # 2. A restoration physically filling the gap.
     sub, c = crop_around(mask, centre, restoration_radius_mm, spacing)

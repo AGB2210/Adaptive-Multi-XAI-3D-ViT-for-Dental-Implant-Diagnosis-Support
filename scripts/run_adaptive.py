@@ -46,13 +46,15 @@ from src.xai.calibration import (  # noqa: E402
     reliability_diagram,
     uncertainty,
 )
-from src.xai.runner import (  # noqa: E402
+from src.xai.runner import (
     load_case_set,
     load_model,
     predict_case_logits,
     require_prerequisites,
     resolve_fold,
+    select_cases,  # noqa: E402
     training_baselines,
+    xai_setting,
 )
 from src.xai.visualize import pareto_curve  # noqa: E402
 
@@ -68,7 +70,8 @@ def main() -> None:
                          "attribution and still non-deterministic in attention")
     ap.add_argument("--fold", type=int, default=None,
                     help="cross-validation round; inferred from a cv_foldK checkpoint path")
-    ap.add_argument("--n-cases", dest="n_cases", type=int, default=20)
+    ap.add_argument("--n-cases", dest="n_cases", type=int, default=None,
+                    help="default comes from xai.adaptive_cases in the config")
     ap.add_argument("--from-csv", dest="from_csv", action="store_true",
                     help="reuse artifacts/results_ablations.csv and only redo the summary; "
                          "the per-case sweep costs over an hour and must not be lost to a "
@@ -128,7 +131,8 @@ def main() -> None:
     # ---- 3. fusion on TEST ----------------------------------------------
     cases = load_case_set(cfg, "test", primary_dataset(cfg), fold=fold)
     ids, y = cases.ids, cases.y
-    ids, y = ids[: args.n_cases], y[: args.n_cases]
+    ids, y = select_cases(ids, y, xai_setting(cfg, "adaptive_cases", args.n_cases, 20),
+                          cfg.seed, log)
     test_logits = predict_case_logits(model, cases, device)
     test_probs = apply_temperature(test_logits, temperature)
     test_uncertainty = uncertainty(test_probs, args.uncertainty)

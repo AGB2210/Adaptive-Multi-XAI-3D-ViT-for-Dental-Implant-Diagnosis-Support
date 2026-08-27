@@ -59,6 +59,9 @@ from src.utils.log import get_logger  # noqa: E402
 log = get_logger("implant_labels")
 
 
+MAX_SKIP_FRACTION = 0.02
+
+
 def rules_from(cfg, args) -> dict:
     """Thresholds, config first and command line on top. Never silently defaulted."""
     site = getattr(cfg, "sites", None)
@@ -123,7 +126,7 @@ def score_one(mask, spacing, rules: dict) -> list[dict]:
                 continue
 
             centre = (info["xy"][0], info["xy"][1], 0)
-            occ = site_is_occupied(oriented, centre, spacing, centroids)
+            occ = site_is_occupied(oriented, centre, spacing, centroids, tooth=tooth)
             m = measure_site(oriented, centre, jaw, spacing)
             verdict = feasibility(m, **rules)
 
@@ -243,6 +246,19 @@ def main() -> None:
     out = artifacts_dir(cfg) / f"sites_{dataset}.csv"
     df.to_csv(out, index=False, encoding="utf-8")
     log.info("wrote %s (%d rows, %d scans skipped)", out, len(df), skipped)
+
+    # A skip is a scan we could not measure, and a build that skips most of the
+    # cohort still exits 0 with a plausible-looking CSV. That is not theoretical:
+    # a refactor once made ridge_width return a bare float where a tuple was
+    # expected, every scan raised, and the run reported success over 141 rows.
+    # Past a few percent this is a broken build, not a few awkward scans.
+    seen = len(df.patient_id.unique()) + skipped
+    if seen and skipped / seen > MAX_SKIP_FRACTION:
+        raise SystemExit(
+            f"{skipped}/{seen} scans skipped ({skipped / seen:.1%}) -- over the "
+            f"{MAX_SKIP_FRACTION:.0%} ceiling. The CSV was written; do not trust it. "
+            f"Read the ERROR lines above: a systematic fault looks exactly like this."
+        )
     summarise(df)
 
 

@@ -6,11 +6,14 @@ voxels are removed, which tests self-consistency, not correctness. A method can
 be perfectly self-consistent and still be pointing at the wrong anatomy.
 
 ToothFairy3 ships voxel masks, so for once the question "is the explanation
-pointing at the implant?" has a ground-truth answer.
+pointing at the inferior alveolar canal?" has a ground-truth answer. That is
+what makes this a testbed rather than a demo: the label is a known deterministic
+function of a known, voxel-localised structure, so we know exactly what evidence
+a correct model must use.
 
-Choosing the metric matters more than it looks. An implant at 1 mm occupies on
-the order of 100 voxels out of 2,097,152 -- about 0.005% of the volume. Against
-a target that small:
+Choosing the metric matters more than it looks. The canal crossing a 96^3 patch
+at 0.3 mm occupies a few thousand voxels out of 884,736 -- a fraction of a
+percent. Against a target that small:
 
   * IoU and Dice are near-zero for ANY diffuse map and mostly measure how
     peaked a method is, not whether it is correct. They are reported at a fixed
@@ -24,11 +27,24 @@ a target that small:
     the strictest and the easiest to explain in a paper.
 
 A caveat that belongs beside any result from this module: attention rollout and
-Grad-CAM are natively 8x8x8 = 512 tokens, so one token covers a 16x16x16 mm
-block -- vastly larger than an implant. Their apparent voxel precision is
-upsampling, not evidence, and they are penalised here for a resolution limit
-rather than for being wrong. Compare them to each other, and to the per-voxel
-methods only with that stated.
+Grad-CAM are native to the TOKEN grid, not the voxel grid. On the site config
+that is 12x12x12 tokens over a 96^3 patch, so one token covers 2.4 mm -- the
+same order as the 2-3 mm canal, which is why model.patch_size is 4 and not 8.
+At patch_size 8 a token spans 4.8 mm, wider than the structure it is being
+scored against, and the comparison stops meaning anything.
+
+Read the grid off the model rather than from this docstring. run_xai.py prints
+it from the checkpoint and warns when a token is wider than the canal. Their
+apparent voxel precision is upsampling, not evidence, and they are penalised
+here for a resolution limit rather than for being wrong. Compare them to each
+other, and to the per-voxel methods only with that stated.
+
+An achievable-ceiling control is what would put a scale under these numbers: run
+the same methods on the synthetic planted-signal task, where the correct answer
+is known exactly, and report enrichment relative to what each method can reach
+at its own resolution. Without it, "3.2x enrichment" has no denominator. Not
+implemented yet; it is CPU-only and cheap, and it would strengthen every
+localisation result in the paper.
 """
 
 from __future__ import annotations

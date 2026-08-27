@@ -33,7 +33,11 @@ from src.xai.runner import (  # noqa: E402
     require_prerequisites,
     resolve_fold,
     training_baselines,
+    xai_setting,
 )
+
+NATIVE_SPACING_MM = 0.3      # ToothFairy3 is isotropic 0.3 mm; nothing is resampled
+CANAL_DIAMETER_MM = 3.0      # inferior alveolar canal, 2-3 mm across
 
 log = get_logger("run_xai")
 
@@ -124,8 +128,10 @@ def main() -> None:
     ap.add_argument("--fold", type=int, default=None,
                     help="cross-validation round; inferred from a cv_foldK checkpoint path")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS) + ["grad_rollout"])
-    ap.add_argument("--ig-steps", dest="ig_steps", type=int, default=256)
-    ap.add_argument("--shap-samples", dest="shap_samples", type=int, default=24)
+    ap.add_argument("--ig-steps", dest="ig_steps", type=int, default=None,
+                    help="default comes from xai.ig_steps in the config")
+    ap.add_argument("--shap-samples", dest="shap_samples", type=int, default=None,
+                    help="default comes from xai.shap_samples in the config")
     # Reduce THIS, never --ig-steps, when memory is tight: batch size costs time,
     # step count costs correctness (32 steps -> 48% completeness error).
     ap.add_argument("--ig-batch", dest="ig_batch", type=int, default=4)
@@ -145,13 +151,27 @@ def main() -> None:
     model, ckpt = load_model(cfg, args.checkpoint, device)
     geometry = describe_token_geometry(model)
     log.info("checkpoint epoch %s | token geometry: %s", ckpt.get("epoch"), geometry)
-    if geometry["n_patch_tokens"] != 512:
-        log.warning("token grid is %s (%d tokens), not the documented 8x8x8/512 -- "
-                    "derived from the checkpoint, so this is authoritative",
-                    geometry["grid_size"], geometry["n_patch_tokens"])
+    # Read off the checkpoint, never assumed: the conv stem's stride 2 means a
+    # token spans 2 x patch_size input voxels, which is how patch_size 8 came to
+    # be documented as 2.4 mm/token while measuring 4.8 mm -- wider than the
+    # 2-3 mm canal the explanations exist to resolve.
+    mm_per_token = model_img_size(cfg) / geometry["grid_size"][0] * NATIVE_SPACING_MM
+    log.info("token grid %s (%d tokens), %.2f mm per token",
+             geometry["grid_size"], geometry["n_patch_tokens"], mm_per_token)
+    if mm_per_token > CANAL_DIAMETER_MM:
+        log.warning("a token spans %.2f mm, wider than the %.1f mm inferior alveolar "
+                    "canal. Localisation cannot resolve what it is being scored "
+                    "against; lower model.patch_size.", mm_per_token, CANAL_DIAMETER_MM)
 
+    ig_steps = xai_setting(cfg, "ig_steps", args.ig_steps, 256)
+    shap_samples = xai_setting(cfg, "shap_samples", args.shap_samples, 24)
     log.info("IG: %d steps at batch %d | GradientSHAP: %d samples at batch %d",
-             args.ig_steps, args.ig_batch, args.shap_samples, args.shap_batch)
+             ig_steps, args.ig_batch, shap_samples, args.shap_batch)
+    if shap_samples < 128:
+        log.warning("GradientSHAP at %d samples: the 24-sample setting measured a "
+                    "relative standard error of 0.5689 and was not quotable. Raise "
+                    "xai.shap_samples before reporting anything from this run.",
+                    shap_samples)
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     log.info("baselines ready (%s volumes from round %s training folds)",
              "none" if baselines is None else len(baselines), fold)
@@ -160,8 +180,8 @@ def main() -> None:
     methods = build_ensemble(
         model, device, names=tuple(n for n in names if n != "lime3d"),
         mean_volume=mean_volume, baselines=baselines,
-        integrated_gradients={"steps": args.ig_steps, "batch_size": args.ig_batch},
-        gradient_shap={"n_samples": args.shap_samples, "batch_size": args.shap_batch},
+        integrated_gradients={"steps": ig_steps, "batch_size": args.ig_batch},
+        gradient_shap={"n_samples": shap_samples, "batch_size": args.shap_batch},
     )
     if args.lime:
         methods["lime3d"] = build_method("lime3d", model, device)

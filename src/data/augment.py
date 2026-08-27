@@ -1,9 +1,16 @@
 """Train-time augmentation for 3D CBCT volumes.
 
-Arrays are RAS+ with axes (x=L->R, y=P->A, z=I->S), so only the sagittal mirror
-(axis 0) is anatomically sane. Flipping anterior-posterior or superior-inferior
-would produce anatomy that cannot occur in a patient, and would teach the model
-that "upside-down mandible" is a normal presentation.
+The left-right flip assumes axis 0 IS left-right, which is true only when the
+caller reoriented to RAS+ (x=L->R, y=P->A, z=I->S). The 128^3 cache does, via
+nib.as_closest_canonical; the site cache deliberately does NOT, keeping the
+label's own frame with only a z flip. On a scan stored anterior-posterior along
+axis 0, `vol[::-1]` mirrors A-P instead -- anatomy that cannot occur in a
+patient, with the mental foramen on the wrong side -- and nothing downstream
+notices, because the volume still looks like a jaw.
+
+So `flip_lr_prob` is only safe on a reoriented cache. `configs/sites.yaml` sets
+it to 0 for that reason. Flipping superior-inferior is never sane and is not
+offered at all.
 """
 
 from __future__ import annotations

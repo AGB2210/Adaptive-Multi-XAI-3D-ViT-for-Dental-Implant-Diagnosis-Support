@@ -73,13 +73,27 @@ class TestSiteTask:
         x = cases.load(f"P1{SITE_SEP}36", torch.device("cpu"))
         assert tuple(x.shape) == (1, 1, 16, 16, 16)
 
-    def test_the_patch_is_centred_on_the_site(self, cache):
-        """A patch offset by a few voxels would explain the wrong anatomy, and
-        nothing downstream would notice."""
+    def test_the_patch_is_pushed_toward_the_structure_that_decides(self, cache):
+        """Deliberately NOT centred on the crest. A centred 96^3 box at 0.3 mm
+        reached 14.4 mm below the crest against a 12.0 mm threshold, so 26.2% of
+        sites needing an implant had their limiting structure outside the input,
+        while half the box sat above the crest on air and opposing crowns.
+
+        Quarter-shifted (patch // 4), the crest sits high in the box: here z=30
+        with patch 16 shifts the centre to 26, so the crest lands at index 12 of
+        16 rather than 8."""
         cases = self.build(cache, patch=16)
         x = cases.load(f"P1{SITE_SEP}36", torch.device("cpu"))
-        assert x[0, 0, 8, 8, 8].item() == pytest.approx(7.0)
-        assert x.min().item() == 0.0      # the -3.0 marker is outside the patch
+        assert x[0, 0, 8, 8, 12].item() == pytest.approx(7.0), "crest not where the shift puts it"
+        assert x[0, 0, 8, 8, 8].item() != pytest.approx(7.0), "patch is still centred"
+
+    def test_x_and_y_are_still_centred(self, cache):
+        """Only z moves. Shifting in-plane would centre the box on different
+        anatomy than the label describes."""
+        cases = self.build(cache, patch=16)
+        x = cases.load(f"P1{SITE_SEP}36", torch.device("cpu"))
+        col = x[0, 0, :, :, 12]
+        assert col[8, 8].item() == pytest.approx(7.0)
 
     def test_patient_of_strips_the_tooth(self, cache):
         cases = self.build(cache)

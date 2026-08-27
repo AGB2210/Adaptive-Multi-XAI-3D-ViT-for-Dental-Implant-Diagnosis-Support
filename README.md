@@ -97,8 +97,8 @@ from the checkpoint.
 Measured over all 522 usable scans, of the sites that need an implant:
 
 ```
-mandible    637 needed,  585 measurable   91.8%
-maxilla    1682 needed,   72 measurable    4.3%
+mandible    884 needed,  826 measurable   93.4%
+maxilla    2682 needed,   36 measurable    1.3%
 ```
 
 98% of the unmeasurable maxillary sites have no bone voxels at all — after an
@@ -107,16 +107,16 @@ upper tooth is lost the ridge resorbs, the sinus pneumatises, and ToothFairy3's
 annotation gap as a clinical verdict.
 
 Nothing important is lost: the inferior alveolar canal is annotated in **every**
-scan, and nerve clearance limits 311 of the 361 infeasible sites — which is both
+scan, and nerve clearance limits 408 of the 478 infeasible sites — which is both
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
 
 ## The three numbers to quote a result against
 
 ```
-BCE floor    1.2026     loss of a model that has learned nothing
+BCE floor    0.9145     loss of a model that has learned nothing
 AUROC floor  0.500
-AP floor     0.0952     = mean prevalence
+AP floor     0.3404     = mean prevalence
 ```
 
 `train.py` prints the floor before the first epoch. **It moves with the label
