@@ -32,10 +32,19 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.splits import check_folds_disjoint, load_folds  # noqa: E402
-from src.data.taskdef import all_target_names, primary_dataset  # noqa: E402
+from src.data.taskdef import (  # noqa: E402
+    all_target_names,
+    label_names_for,
+    primary_dataset,
+    regression_names_for,
+)
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
+from src.train.targets import (  # noqa: E402
+    format_regression,
+    regression_metrics,
+)
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -73,6 +82,7 @@ def main() -> None:
     # to load it -- which is the good outcome. The silent version of this bug is
     # a head that happens to match and reports one target under another's name.
     labels = all_target_names(cfg)
+    n_bin = len(label_names_for(cfg))
     cfg.model.num_classes = len(labels)
 
     set_seed(cfg.seed)
@@ -125,11 +135,19 @@ def main() -> None:
         # pooled set -- picking one threshold on all 532 would tune it on the
         # same cases it is scored against.
         metrics_path = run_dir / "metrics.json"
-        thresholds = json.loads(metrics_path.read_text(encoding="utf-8"))["val"]["thresholds"]
-        thr = np.array([thresholds[name] for name in labels], dtype=np.float64)
-        preds = (probs >= thr).astype(int)
+        val = json.loads(metrics_path.read_text(encoding="utf-8"))["val"]
+        # metrics.json is nested by unit now -- {"val": {"classification": ...,
+        # "regression": ...}} -- because millimetre heads have no thresholds to
+        # report. The flat shape is still read so checkpoints from before the
+        # hybrid head can be pooled without being retrained.
+        thresholds = val.get("classification", val).get("thresholds", {})
+        thr = np.array([thresholds[name] for name in labels[:n_bin]], dtype=np.float64)
+        preds = (probs[:, :n_bin] >= thr).astype(int)
 
-        fold_macro = evaluate(targets, probs, labels)["macro_auroc"]
+        # Binary block only: macro AUROC over a millimetre column is not a
+        # quantity. The millimetre heads are pooled and scored below, in mm.
+        fold_macro = evaluate(targets[:, :n_bin], probs[:, :n_bin],
+                              labels[:n_bin])["macro_auroc"]
         per_fold.append({"fold": k, "n": len(test_ids), "macro_auroc": fold_macro})
         log.info("round %d: n=%3d  macro AUROC %.4f  (epoch %s)",
                  k, len(test_ids), fold_macro, ckpt.get("epoch", "?"))
@@ -170,15 +188,26 @@ def main() -> None:
                        + y_pred[i].tolist())
     log.info("wrote %s", pred_csv)
 
-    pooled = evaluate(y_true, y_prob, labels, n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+    binary_names = labels[:n_bin]
+    pooled = evaluate(y_true[:, :n_bin], y_prob[:, :n_bin], binary_names,
+                      n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
 
     # F1 is recomputed from each fold's own thresholds rather than retuned on the
     # pooled set, so it stays comparable with the per-round numbers.
-    for i, name in enumerate(labels):
+    for i, name in enumerate(binary_names):
         pooled["per_label"][name]["f1"] = f1_from_binary(y_true[:, i], y_pred[:, i])
-    pooled["macro_f1"] = float(np.mean([pooled["per_label"][n]["f1"] for n in labels]))
+    pooled["macro_f1"] = float(np.mean([pooled["per_label"][n]["f1"] for n in binary_names]))
 
-    print("\n" + format_metrics(pooled, labels, f"VIT3D -- POOLED across {len(folds)} test folds"))
+    print("\n" + format_metrics(pooled, binary_names,
+                                f"VIT3D -- POOLED across {len(folds)} test folds"))
+
+    mm_names = regression_names_for(cfg)
+    if mm_names:
+        # Every case predicted once, by a model that never saw it -- the same
+        # discipline as the classification pooling, in millimetres.
+        pooled_mm = regression_metrics(y_true[:, n_bin:], y_prob[:, n_bin:], mm_names)
+        print(format_regression(pooled_mm,
+                                f"pooled across {len(folds)} test folds -- millimetres"))
 
     macros = [f["macro_auroc"] for f in per_fold]
     print(f"\nper-fold macro AUROC: {', '.join('%.4f' % m for m in macros)}")

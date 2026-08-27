@@ -27,10 +27,16 @@ from src.data.taskdef import (  # noqa: E402
     external_dataset,
     label_names_for,
     primary_dataset,
+    regression_names_for,
 )
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file, predict  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
+from src.train.targets import (  # noqa: E402
+    TargetSpec,
+    format_regression,
+    regression_metrics,
+)
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -95,7 +101,16 @@ def main() -> None:
         raise SystemExit(f"no cases in the {args.split!r} split -- run scripts/train.py first")
 
     logits = predict_case_logits(model, cases, device, batch_size=cfg.train.batch_size)
-    probs = 1.0 / (1.0 + np.exp(-logits))
+    # Sigmoid the binary block ONLY. On a millimetre head it squashes an 18 mm
+    # prediction to 1.0 and every metric downstream becomes a statement about a
+    # constant. The millimetre block is un-standardised instead, using the
+    # scaler that travelled in the checkpoint.
+    spec = TargetSpec.from_state(ckpt.get("target_spec"))
+    n_bin = len(label_names_for(cfg))
+    probs = np.array(logits, dtype=np.float64, copy=True)
+    probs[:, :n_bin] = 1.0 / (1.0 + np.exp(-logits[:, :n_bin]))
+    if spec.is_hybrid:
+        probs = spec.to_millimetres(probs.astype(np.float32)).astype(np.float64)
 
     # Thresholds come from validation, never from the split being reported.
     val_metrics_path = Path(args.checkpoint).parent / "best_val_metrics.json"
@@ -104,10 +119,22 @@ def main() -> None:
         thresholds = json.loads(val_metrics_path.read_text(encoding="utf-8"))["thresholds"]
         log.info("using validation-tuned thresholds from %s", val_metrics_path)
 
-    metrics = evaluate(targets, probs, labels, thresholds=thresholds,
+    # Binary metrics on the binary block, millimetre metrics on the rest.
+    # Scoring every column with `evaluate` reported available_height_mm at
+    # "prevalence 13.11" with an AP of 15.315 and a "threshold" of 19.997 mm --
+    # numbers that are not wrong so much as meaningless, since 18 mm is not a
+    # probability and AP over it is not defined.
+    mm_names = regression_names_for(cfg)
+    metrics = evaluate(targets[:, :n_bin], probs[:, :n_bin], labels[:n_bin],
+                       thresholds=thresholds,
                        n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
-    print("\n" + format_metrics(metrics, labels, f"{primary} {args.split} (n={len(ids)})"))
+    print("\n" + format_metrics(metrics, labels[:n_bin],
+                                f"{primary} {args.split} (n={len(ids)})"))
     results[f"{primary}_{args.split}"] = metrics
+    if mm_names:
+        mm = regression_metrics(targets[:, n_bin:], probs[:, n_bin:], mm_names)
+        print(format_regression(mm, f"{primary} {args.split} -- millimetres"))
+        results[f"{primary}_{args.split}_mm"] = mm
 
     # ---- external cohort, zero-shot -------------------------------------
     external = external_dataset(cfg)

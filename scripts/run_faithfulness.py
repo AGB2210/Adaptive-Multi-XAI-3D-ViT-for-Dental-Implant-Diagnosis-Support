@@ -96,8 +96,32 @@ def main() -> None:
     log.info("%s/%s: %d cases available", dataset, args.split, len(ids))
     ids, y = select_cases(ids, y, n_cases, cfg.seed, log)
 
+    # Kept so the randomisation cascade can rebuild each method IDENTICALLY.
+    # `build_method(name, m, device)` with no options was rebuilding
+    # integrated_gradients at its 256-step default against a config asking for
+    # 16, and gradient_shap at 24 samples against 8 -- and, worse, without the
+    # training baselines. The cascade then compared an intact attribution built
+    # with one baseline against re-initialised attributions built with another,
+    # so part of what it measured was the baseline change rather than the weight
+    # randomisation. It also made the stage 70x slower than the other methods,
+    # which is how it was noticed at all.
+    method_opts = {
+        "integrated_gradients": {"steps": xai_setting(cfg, "ig_steps", None, 256),
+                                 "batch_size": 4},
+        "gradient_shap": {"n_samples": xai_setting(cfg, "shap_samples", None, 24),
+                          "batch_size": 4},
+    }
     methods = build_ensemble(model, device, names=tuple(args.methods),
-                             mean_volume=mean_volume, baselines=baselines)
+                             mean_volume=mean_volume, baselines=baselines,
+                             **method_opts)
+
+    def rebuild(m, name):
+        opts = dict(method_opts.get(name, {}))
+        if name == "integrated_gradients" and mean_volume is not None:
+            opts.setdefault("mean_volume", mean_volume)
+        if name == "gradient_shap" and baselines is not None:
+            opts.setdefault("baselines", baselines)
+        return build_method(name, m, device, **opts)
     art = artifacts_dir(cfg)
     figures = art / "figures"
 
@@ -197,22 +221,30 @@ def main() -> None:
     log.info("model-randomisation sanity check on %d cases...", rand_cases)
     randomization = {}
     rand_rows = []
-    for pid in ids[:rand_cases]:
+    for case_no, pid in enumerate(ids[:rand_cases], 1):
         volume = cases.load(pid, device)
         with torch.no_grad():
             target = explanation_target(cfg, spec,
                                         torch.sigmoid(model(volume))[0].cpu().numpy())
 
         for name in methods:
+            # Per method, not per case: the cascade re-initialises the network 12
+            # times and re-attributes at every stage, so one case takes minutes
+            # and a whole run printed nothing between "sanity check on N cases"
+            # and its own results. That silence is indistinguishable from a hang,
+            # which is exactly the failure mode the deletion/insertion loop had.
+            t0 = time.perf_counter()
             intact = methods[name].attribute(volume, target)
             stages = model_randomization_check(
                 model,
-                lambda m, _n=name: build_method(_n, m, device),
+                lambda m, _n=name: rebuild(m, _n),
                 volume, target, intact, seed=cfg.seed,
             )
             randomization.setdefault(name, stages)
             for stage in stages:
                 rand_rows.append({"patient_id": pid, "method": name, **stage})
+            log.info("  randomisation %d/%d %s (%.0fs)", case_no, rand_cases, name,
+                     time.perf_counter() - t0)
 
     rand_df = pd.DataFrame(rand_rows)
     rand_df.to_csv(art / "results_randomization.csv", index=False)
