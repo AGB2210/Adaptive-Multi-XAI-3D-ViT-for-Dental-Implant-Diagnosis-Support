@@ -26,9 +26,9 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 |---|---|
 | Label builder, arch fitting, site measurement | **Done** — validated against real anatomy |
 | Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
-| Native-resolution cache, patch dataset, training wiring | **Done** |
+| Native-resolution cache builder, patch dataset, training wiring | **Done** — builder verified on 14 scans; the full ~52 GB cache builds on the GPU box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
-| 323 tests | **Green**, ruff clean |
+| 380 tests | **Green**, ruff clean |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **Not started** — needs a rented GPU |
 | Guide sign-off on clinical thresholds | **Pending** |

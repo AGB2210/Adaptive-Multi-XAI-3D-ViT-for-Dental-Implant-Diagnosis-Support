@@ -53,16 +53,20 @@ def load_sites(
     `jaws` defaults to the mandible alone, and that is a finding rather than a
     preference. Measured over all 522 scans, of the sites that need an implant:
 
-        mandible   637 needed, 585 measurable   (91.8%)
-        maxilla   1682 needed,  72 measurable   ( 4.3%)
+        mandible    884 needed, 826 measurable   (93.4%)
+        maxilla    2682 needed,  36 measurable   ( 1.3%)
 
     After a maxillary tooth is lost the alveolar ridge resorbs and the sinus
     pneumatises, and ToothFairy3's UpperJaw mask does not cover what remains --
-    98% of those sites have literally no bone voxels to measure. Training on
+    99% of those sites have literally no bone voxels to measure. Training on
     them would teach the model to reproduce an annotation gap as a clinical
     verdict. The mandible loses nothing important: the inferior alveolar canal
     is annotated in 100% of scans, and nerve clearance is the limiting factor in
-    289 of the 361 infeasible sites, which is the question worth explaining.
+    376 of the 413 infeasible sites, which is the question worth explaining.
+
+    Every count above is what `load_sites` returns from the current CSV. They
+    moved when the occupancy fix landed (`needs_implant` 530 -> 709); recompute
+    rather than quote them from memory.
     """
     df = pd.read_csv(sites_csv, dtype={"patient_id": str})
     for column in ("patient_id", "tooth", "site_x", "site_y", *targets):
