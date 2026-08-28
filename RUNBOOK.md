@@ -58,16 +58,29 @@ the way through a build you are paying for by the hour.
 ## 2. Setup
 
 ```bash
-git clone --branch v3.0.1 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
+git clone https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
 cd capstone-code
+git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)"
 python -m venv .venv && source .venv/bin/activate
 ```
 
-**Clone the tag, not `main`.** Every expected number in this runbook was measured
-at v3.0.1. Earlier tags are a different task -- v1.0.0's labels are wrong and
-v2.0.0 classifies feasibility instead of measuring it -- so nothing here would
-match. If you need the newest work instead, use `main` and expect the checks
-below to have moved.
+**Take the latest tag, not `main`.** That second line picks it for you --
+`git tag -l --sort=-v:refname` orders tags by version rather than by date, so
+`head -1` is the highest, not the most recently pushed. Confirm what you got:
+
+```bash
+cat VERSION
+```
+
+Every expected number below is checked against the code you just cloned, so a
+newer tag will still agree with it -- and where a number has moved, the command
+that produces it is given beside it so you can see the current value rather than
+trust this page. **Do not go backwards.** The older tags answer a different
+question: v1.0.0's labels are wrong, and v2.0.0 classifies feasibility instead
+of measuring it, so nothing here would match.
+
+`main` is fine too if you want work that is not yet released; expect the counts
+below to have moved and read them as approximate.
 
 On Windows the activate line is `.venv\Scripts\activate` instead.
 
@@ -107,13 +120,18 @@ Expect **532**.
 python -m pytest -q
 ```
 
-Expect `380 passed`.
+**Everything must pass and nothing may fail.** Don't check the count against a
+number written here -- it only goes up as tests are added, and a runbook that
+tells you to halt on `385 passed` because it was written at 380 wastes your
+time. `0 failed` is the gate. (It was 380 at v3.0.1, for reference only.)
 
 ```bash
 python scripts/check_imports.py
 ```
 
-Expect 50 modules.
+Must exit 0 -- it imports every module in `src/` and `scripts/` and fails on the
+first one that cannot be loaded, which is how a missing dependency shows up
+before it costs you GPU hours. The module count it prints is informational.
 
 ```bash
 python scripts/train.py --config configs/sites_smoke.yaml --synthetic
@@ -167,14 +185,20 @@ This writes `artifacts_sites/sites_toothfairy3.csv`. Sanity-check it:
 python -c "from src.data.site_dataset import load_sites; d=load_sites('artifacts_sites/sites_toothfairy3.csv',targets=['needs_implant','feasible'],jaws=['lower'],methods=['teeth']); n=d[d.needs_implant==1]; print(len(d),'sites',d.patient_id.nunique(),'patients'); print(len(n),'need an implant |',int((n.feasible==0).sum()),'not feasible')"
 ```
 
-**Expect exactly:**
+**At v3.0.1 that prints:**
 
 ```
 6787 sites 486 patients
 709 need an implant | 413 not feasible
 ```
 
-If these differ, something changed upstream. Do not continue — report it.
+Unlike the test count, this one is worth stopping over. It depends on the
+dataset and on the label rules, not on how much code has been written since,
+so a difference means one of those two moved. Check the release notes for the
+tag you cloned before you continue — if the label rules changed deliberately
+the notes will say so and the new figures are correct; if they did not, the
+dataset is not the one this was built against. Either way, do not start paying
+for a GPU until you know which.
 
 These numbers moved once already, and the reason is worth knowing before you
 trust them. An audit found occupancy was decided by centroid distance computed

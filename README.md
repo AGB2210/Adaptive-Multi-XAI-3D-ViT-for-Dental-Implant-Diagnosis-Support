@@ -28,7 +28,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
 | Native-resolution cache builder, patch dataset, training wiring | **Done** — builder verified on 14 scans; the full ~52 GB cache builds on the GPU box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
-| 380 tests | **Green**, ruff clean |
+| Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **Not started** — needs a rented GPU |
 | Guide sign-off on clinical thresholds | **Pending** |
@@ -113,12 +113,22 @@ canal is a dark tube inside bone rather than a bright edge.
 
 ## Versions
 
-**v3.0.1 is current.** Clone the tag, not just `main`, if you want a state that
-matches this README exactly:
+**Always take the latest tag.** No version number is written here as "the
+current one", because that line goes stale the moment the next one is cut:
 
 ```bash
-git clone --branch v3.0.1 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git
+git clone https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git
+cd Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support
+git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)"
+cat VERSION
 ```
+
+`--sort=-v:refname` orders by version rather than push date, so `head -1` is the
+highest tag and not merely the newest. The releases page marks the same one
+"Latest".
+
+The rest of this section is about which *older* tags exist and why none of them
+may be used or quoted against another. That does not go stale.
 
 **Do not use v1.0.0.** It predates an audit that found two faults in the label
 builder, and the release tarball still contains them: occupancy matched teeth
