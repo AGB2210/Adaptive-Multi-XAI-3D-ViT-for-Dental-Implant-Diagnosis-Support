@@ -97,7 +97,24 @@ def load_sites(
 
 
 def target_matrix(df: pd.DataFrame, targets=SITE_TARGETS) -> np.ndarray:
-    return df[list(targets)].to_numpy(dtype=np.float32)
+    """Labels as (n_sites, n_targets) float32, OWNED rather than a view.
+
+    `copy=True` is not defensive tidiness. Without it pandas is free to hand
+    back a view onto the frame's own block, and whether it does depends on the
+    pandas version, the frame's dtypes and whether the columns happen to be
+    consolidated -- so the same code returns a writable array on one machine and
+    a read-only one on another. Ours did exactly that: CI warned
+    `torch.from_numpy` had been given a non-writable array while the same test
+    passed silently here on pandas 2.3.3.
+
+    Either outcome is a trap. Read-only, torch says writing to the tensor is
+    undefined behaviour. Writable, the tensor shares memory with the DataFrame,
+    so one in-place op anywhere downstream -- a standardisation, a
+    `nan_to_num_`, a collate that reuses its output -- rewrites the labels for
+    every later epoch. With `--num-workers 0`, which is what the runbook's smoke
+    step uses, that corruption is in-process and permanent.
+    """
+    return df[list(targets)].to_numpy(dtype=np.float32, copy=True)
 
 
 
@@ -253,7 +270,7 @@ def patient_label_matrix(sites: pd.DataFrame, targets=SITE_TARGETS):
     Returns (patient_ids, matrix) aligned row for row.
     """
     grouped = sites.groupby("patient_id")[list(targets)].max()
-    return grouped.index.tolist(), grouped.to_numpy(dtype=np.float32)
+    return grouped.index.tolist(), grouped.to_numpy(dtype=np.float32, copy=True)
 
 
 def sites_for_patients(sites: pd.DataFrame, patient_ids) -> pd.DataFrame:

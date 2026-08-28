@@ -31,7 +31,10 @@ class CachedVolumeDataset(Dataset):
             raise ValueError(f"{len(patient_ids)} ids vs {len(labels)} label rows")
         self.cache_dir = Path(cache_dir)
         self.patient_ids = list(patient_ids)
-        self.labels = np.asarray(labels, dtype=np.float32)
+        # np.array, not np.asarray: `labels` often arrives as a pandas view,
+        # and __getitem__ hands it straight to torch.from_numpy. See
+        # site_dataset.target_matrix for what that costs either way.
+        self.labels = np.array(labels, dtype=np.float32)
         self.augment = augment
         self.seed = seed
 

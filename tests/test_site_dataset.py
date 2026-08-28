@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from src.data.site_dataset import (
+    SITE_TARGETS,
     SitePatchDataset,
     cut_patch,
     group_ids,
@@ -168,6 +169,36 @@ class TestSitePatchDataset:
         x, y = ds[0]
         assert tuple(x.shape) == (1, 16, 16, 16)
         assert tuple(y.shape) == (3,)      # 1 binary + 2 millimetre heads
+
+    def test_targets_do_not_share_memory_with_the_frame(self, tmp_path):
+        """A sample's labels must be a copy, not a window into `sites`.
+
+        Read this as a guard, not a reproduction. Whether `to_numpy` returns a
+        view depends on the pandas build, and on 2.3.3 it always materialises,
+        so this test passes with or without the `copy=True` that fixes it. It
+        only fails on the builds that have the bug -- which is precisely the
+        machine where it needs to fail, since CI hit the torch warning while
+        the same test passed here.
+
+        The properties asserted are the ones that matter either way: the array
+        must be writable (torch calls in-place ops on a read-only tensor
+        undefined behaviour) and must not alias the frame (or one in-place op
+        downstream rewrites the labels for every later epoch).
+        """
+        cache, sites = self.build(tmp_path)
+        ds = SitePatchDataset(cache, sites, patch_size=16)
+
+        assert ds.labels.flags.writeable, (
+            "torch.from_numpy on a read-only array gives a tensor whose "
+            "in-place ops are undefined behaviour"
+        )
+        assert not np.shares_memory(ds.labels, sites[list(SITE_TARGETS)].to_numpy())
+
+        _, y = ds[0]
+        before = float(sites.iloc[0][SITE_TARGETS[1]])
+        y[1] = -999.0                        # the thing a collate or a
+        after = float(sites.iloc[0][SITE_TARGETS[1]])   # standardisation does
+        assert after == before, "writing to a sample rewrote the source frame"
 
     def test_one_sample_per_site_not_per_scan(self, tmp_path):
         cache, sites = self.build(tmp_path, n_patients=3)
