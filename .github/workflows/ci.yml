@@ -110,8 +110,32 @@ jobs:
               assert set(val["classification"]["per_label"]) == set(binary)
           if mm:
               assert set(val["regression"]) == set(mm)
+              # A VALUE check, not just a shape check. The bug that shipped --
+              # the loss comparing raw millimetres to standardised outputs --
+              # produced an MAE of 53.5 mm on a target whose whole range was
+              # 17-26 mm, and a gate that only asserted these keys EXIST would
+              # have passed it. So would sigmoided millimetres squashed to
+              # (0, 1).
+              #
+              # The bound is deliberately loose, and 3.0 is measured rather
+              # than guessed. One epoch on 32^3 synthetic volumes does not
+              # converge, so this cannot assert MAE < floor without flaking,
+              # and a flaky gate is worse than none. Across seeds 1337, 7 and
+              # 42 at one epoch the ratio ran 1.03x to 1.96x. A broken
+              # transform lands at 4.7x or higher on this data, because the
+              # targets centre at 18 mm and 10 mm against floors of 2.6 and
+              # 1.9. 3.0 sits between the two with margin on both sides.
               for name, r in val["regression"].items():
                   assert "mae" in r and "mae_floor" in r, f"{name} has no floor to read against"
+                  ratio = r["mae"] / r["mae_floor"]
+                  print(f"   {name:22} MAE {r['mae']:.3f} = {ratio:.2f}x floor {r['mae_floor']:.3f}")
+                  assert ratio < 3.0, (
+                      f"{name}: MAE {r['mae']:.3f} is {ratio:.1f}x its floor "
+                      f"{r['mae_floor']:.3f}. One epoch does not converge, but it "
+                      f"does not miss by this much either -- suspect the "
+                      f"standardisation direction or a squashed output, not "
+                      f"undertraining"
+                  )
               assert val["threshold_sensitivity"], "the threshold sweep was not produced"
           print(f"ok: {len(binary)} binary + {len(mm)} millimetre heads, "
                 f"{m['n_params']:,} parameters")
