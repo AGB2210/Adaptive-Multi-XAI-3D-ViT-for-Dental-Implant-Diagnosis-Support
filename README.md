@@ -113,11 +113,11 @@ canal is a dark tube inside bone rather than a bright edge.
 
 ## Versions
 
-**v3.0.0 is current.** Clone the tag, not just `main`, if you want a state that
+**v3.0.1 is current.** Clone the tag, not just `main`, if you want a state that
 matches this README exactly:
 
 ```bash
-git clone --branch v3.0.0 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git
+git clone --branch v3.0.1 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git
 ```
 
 **Do not use v1.0.0.** It predates an audit that found two faults in the label

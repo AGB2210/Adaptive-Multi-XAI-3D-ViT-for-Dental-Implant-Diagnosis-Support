@@ -48,18 +48,23 @@ The cache is the surprise: **~100 MB per scan × 532 scans ≈ 52 GB**, because
 this pipeline deliberately does *no* downsampling. Do not rent a box with a
 50 GB disk.
 
+That figure is measured, not estimated — 14 cached scans occupy 1,401 MB on the
+development machine. If someone tells you the cache is 25 GB, check it against
+`du -sh` before you believe them; a wrong number here strands you two thirds of
+the way through a build you are paying for by the hour.
+
 ---
 
 ## 2. Setup
 
 ```bash
-git clone --branch v3.0.0 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
+git clone --branch v3.0.1 https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
 cd capstone-code
 python -m venv .venv && source .venv/bin/activate
 ```
 
 **Clone the tag, not `main`.** Every expected number in this runbook was measured
-at v3.0.0. Earlier tags are a different task -- v1.0.0's labels are wrong and
+at v3.0.1. Earlier tags are a different task -- v1.0.0's labels are wrong and
 v2.0.0 classifies feasibility instead of measuring it -- so nothing here would
 match. If you need the newest work instead, use `main` and expect the checks
 below to have moved.
@@ -214,6 +219,19 @@ Budget from a measured rate: faithfulness ran **47 s per case on CPU** at smoke
 scale, so 200 cases is ~2.6 h on CPU and considerably less on the GPU. Every
 script now logs `N/M cases done` with a per-case time, so you can extrapolate
 after the first case rather than guessing.
+
+**One extra thing to run while you are here.** The model-randomisation table in
+`REPORT.md` §C9 was measured before a fault in the cascade's rebuild path was
+fixed, and two of its four rows (`integrated_gradients`, `gradient_shap`) are
+marked provisional because of it. The fix is already in the code, so a re-run
+settles them:
+
+```bash
+python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --only-randomization
+```
+
+About an hour. Send the result back with everything else — it decides whether a
+headline claim in the paper stands as written.
 
 All five use fold 0's checkpoint.
 
