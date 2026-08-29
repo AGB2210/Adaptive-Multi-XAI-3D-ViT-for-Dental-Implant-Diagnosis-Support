@@ -27,7 +27,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
-from src.train.targets import TargetSpec  # noqa: E402
+from src.train.targets import TargetSpec, to_report_units  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -100,20 +100,43 @@ def main() -> None:
     val_ids, val_y, label_names = val_cases.ids, val_cases.y, val_cases.labels
     val_logits = predict_case_logits(model, val_cases, device)
 
-    probs_before = 1.0 / (1.0 + np.exp(-val_logits))
-    ece_before, bins_before = expected_calibration_error(probs_before, val_y)
+    # Calibration is a statement about PROBABILITIES, so it runs on the binary
+    # block alone. Passing the whole hybrid matrix -- which this script did --
+    # fits a temperature against targets of 13-26 mm: the BCE has no minimum in
+    # T, LBFGS walks log T to infinity, and T comes back NaN. Every calibrated
+    # probability, every uncertainty score and the gate threshold are then NaN,
+    # and `nan >= nan` is False, so the gate never escalates a single case and
+    # the Pareto sweep collapses to one point. The tell was ece_before = 9.097,
+    # a value ECE cannot reach when both its arguments are probabilities.
+    # A checkpoint with no target_spec predates the hybrid head and is
+    # all-binary; a spec that declares millimetres but no binary column has
+    # nothing to calibrate, and fitting a temperature on an empty slice would
+    # return a number that means nothing.
+    bin_names = list(spec.binary) if spec.names else list(label_names)
+    if not bin_names:
+        raise SystemExit(
+            "this checkpoint has no binary head, so there is no probability to "
+            "calibrate and no confidence gate to fit. The adaptive layer is "
+            "defined on the binary block; run it on a config that has one."
+        )
+    val_bin_logits = spec.slice_binary(val_logits) if spec.names else val_logits
+    val_bin_y = spec.slice_binary(val_y) if spec.names else val_y
 
-    temperature = fit_temperature(val_logits, val_y)
-    probs_after = apply_temperature(val_logits, temperature)
-    ece_after, bins_after = expected_calibration_error(probs_after, val_y)
+    probs_before = 1.0 / (1.0 + np.exp(-val_bin_logits))
+    ece_before, bins_before = expected_calibration_error(probs_before, val_bin_y)
+
+    temperature = fit_temperature(val_bin_logits, val_bin_y)
+    probs_after = apply_temperature(val_bin_logits, temperature)
+    ece_after, bins_after = expected_calibration_error(probs_after, val_bin_y)
 
     (art / "calibration").mkdir(parents=True, exist_ok=True)
     reliability_diagram(bins_before, bins_after, ece_before, ece_after,
                         art / "calibration" / "reliability.png",
-                        title=f"Validation calibration (n={len(val_ids)} patients x {len(label_names)} labels)")
+                        title=f"Validation calibration (n={len(val_ids)} patients x {len(bin_names)} binary labels)")
     (art / "calibration" / "calibration.json").write_text(json.dumps({
         "temperature": temperature, "ece_before": ece_before, "ece_after": ece_after,
         "n_val_patients": len(val_ids), "fitted_on": "validation split only",
+        "calibrated_labels": list(bin_names),
     }, indent=2), encoding="utf-8")
 
     print("\n" + "=" * 74)
@@ -137,29 +160,49 @@ def main() -> None:
     ids, y = select_cases(ids, y, xai_setting(cfg, "adaptive_cases", args.n_cases, 20),
                           cfg.seed, log)
     test_logits = predict_case_logits(model, cases, device)
-    test_probs = apply_temperature(test_logits, temperature)
-    test_uncertainty = uncertainty(test_probs, args.uncertainty)
+
+    # `select_cases` draws a RANDOM subset, but the logits above are predicted
+    # over every held-out case, so the two are not positionally aligned: row i
+    # of the prediction array is not the case at position i of the sample. The
+    # loop below indexed them as if it were, which attached each row's
+    # uncertainty, routing decision and confidence to a different site than its
+    # own patient_id. Look the row up by id instead.
+    row_of = {pid: i for i, pid in enumerate(cases.ids)}
+
+    test_bin_logits = spec.slice_binary(test_logits) if spec.names else test_logits
+    test_bin_probs = apply_temperature(test_bin_logits, temperature)
+    test_uncertainty = uncertainty(test_bin_probs, args.uncertainty)
+    # Probabilities for the binary block, millimetres for the millimetre block,
+    # so a row reports its target in the unit that target is measured in.
+    test_report = to_report_units(test_logits, spec, temperature)
 
     methods = build_ensemble(model, device, names=tuple(args.methods),
                              mean_volume=mean_volume, baselines=baselines)
 
     rows, per_case = [], []
     for i, pid in enumerate([] if args.from_csv else ids):
+        row = row_of[pid]
         volume = cases.load(pid, device)
         baseline = make_baseline(volume, "blur")
-        target = explanation_target(cfg, spec, test_probs[i])
+        target = explanation_target(cfg, spec, test_report[row])
 
         maps = {name: method.attribute(volume, target) for name, method in methods.items()}
         result = fuse(model, volume, maps, target,
                       weight_metric=WEIGHT_METRIC, eval_metric=EVAL_METRIC,
-                      steps=args.steps, baseline=baseline)
+                      steps=args.steps, baseline=baseline,
+                      target_is_probability=target < len(bin_names))
 
         rows.append({
             "patient_id": pid,
             "target_label": label_names[target],
-            "calibrated_prob": float(test_probs[i, target]),
-            "uncertainty": float(test_uncertainty[i]),
-            "routed_to_ensemble": gate.use_ensemble(test_uncertainty[i]),
+            # In the target's own unit: a calibrated probability for a binary
+            # head, millimetres for a millimetre head. The old column was named
+            # `calibrated_prob` for both, which invited reading 18.4 mm as a
+            # confidence of 18.4.
+            "target_value": float(test_report[row, target]),
+            "target_unit": "probability" if target < len(bin_names) else "mm",
+            "uncertainty": float(test_uncertainty[row]),
+            "routed_to_ensemble": gate.use_ensemble(test_uncertainty[row]),
             "weight_metric": WEIGHT_METRIC,
             "eval_metric": EVAL_METRIC,
             "fused_eval": result["fused_eval"],
@@ -175,7 +218,7 @@ def main() -> None:
                 f"({sorted(result['per_method_eval'])}); the Pareto curve would compare nothing."
             )
         per_case.append({
-            "uncertainty": float(test_uncertainty[i]),
+            "uncertainty": float(test_uncertainty[row]),
             "cheap_eval": result["per_method_eval"][gate.cheap_method],
             "fused_eval": result["fused_eval"],
         })
