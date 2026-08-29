@@ -282,6 +282,31 @@ python scripts/make_figures.py --config configs/sites.yaml --checkpoint artifact
 Add `--deterministic` to any of them if you need bit-reproducible attributions;
 it is slower.
 
+### Anything produced before v3.1.0 has to be re-run
+
+Three scripts converted model outputs with a bare `sigmoid` across the whole
+output row. That is right for the binary head and wrong for the two millimetre
+heads, and it was wrong silently:
+
+| Output | What was wrong before v3.1.0 |
+|---|---|
+| `cv_pooled_metrics.json`, `cv_predictions.csv` | millimetre predictions squashed into (0, 1) and never un-standardised, so the pooled MAE was roughly the mean of the target rather than the model's error |
+| `calibration/calibration.json` | temperature fitted against millimetre targets; `T` came back NaN and `ece_before` above 1 |
+| `results_ablations.csv`, `results_pareto.csv` | every calibrated probability and uncertainty NaN, so the confidence gate never escalated a case and the Pareto sweep collapsed to a single point; rows were also paired with the wrong case's prediction |
+| `figures/case_manifest.csv` | captions reported a bone height as a confidence |
+
+**Check before you trust an existing file:** `ece_before` must be `<= 1`, and
+`temperature` must be finite. If either fails, that run predates the fix.
+
+```bash
+python -c "import json;d=json.load(open('artifacts_sites/calibration/calibration.json'));print(d['temperature'], d['ece_before'])"
+```
+
+`results_faithfulness.csv` is affected differently: the deletion and insertion
+curves for a millimetre target were read through a sigmoid, which cannot
+reverse one curve but can reorder two methods, since an AUC is an integral. The
+localisation results do not depend on any of this.
+
 ---
 
 ## 5. How to tell whether it worked

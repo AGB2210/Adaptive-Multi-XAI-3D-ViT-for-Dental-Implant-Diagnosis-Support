@@ -140,3 +140,35 @@ jobs:
           print(f"ok: {len(binary)} binary + {len(mm)} millimetre heads, "
                 f"{m['n_params']:,} parameters")
           EOF
+
+      - name: Reported predictions come back in millimetres, not in (0, 1)
+        # The pooled metrics, the calibration fit and the figure captions all
+        # read model outputs, and three separate scripts converted them with a
+        # bare `sigmoid` across the whole row. On a millimetre head that maps
+        # 18 mm to 0.9999 and scores it against a truth of 18, so the pooled
+        # MAE reported roughly the mean of the target. Nothing crashed and no
+        # unit test failed. This asserts on a REAL checkpoint that the scaler
+        # travelled and that reporting inverts it.
+        run: |
+          python - <<'EOF'
+          import numpy as np, torch
+          from src.train.targets import TargetSpec, to_report_units
+          ck = torch.load("artifacts_sites/runs/vit3d_synthetic/best.pt",
+                          map_location="cpu", weights_only=False)
+          spec = TargetSpec.from_state(ck.get("target_spec"))
+          assert spec.is_hybrid, "smoke config declares millimetre heads; checkpoint carries no scaler"
+          assert spec.mean is not None and spec.std is not None, "no standardiser in the checkpoint"
+
+          rep = to_report_units(np.zeros((1, spec.n_outputs), dtype=np.float32), spec)
+          print(f"   binary  {spec.binary[0]:22} at logit 0 -> {rep[0, 0]:.4f}")
+          assert abs(rep[0, 0] - 0.5) < 1e-6, "the binary head is not being read as a probability"
+          for i, name in enumerate(spec.millimetres):
+              value, mean = float(rep[0, len(spec.binary) + i]), float(spec.mean[i])
+              print(f"   mm      {name:22} at standardised 0 -> {value:.3f} mm (train mean {mean:.3f})")
+              assert abs(value - mean) < 1e-3, f"{name} did not invert to its training mean"
+              assert value > 1.0, (
+                  f"{name} reports {value:.4f}, inside (0, 1) -- a millimetre head has "
+                  f"been sigmoided, which is the fault this gate exists to catch"
+              )
+          print("ok: binary heads read as probabilities, millimetre heads read as millimetres")
+          EOF
