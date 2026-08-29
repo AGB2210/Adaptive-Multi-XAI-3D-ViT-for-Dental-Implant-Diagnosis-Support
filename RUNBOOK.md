@@ -40,18 +40,26 @@ finding, not an oversight — see `README.md`.
 | | Minimum | Why |
 |---|---|---|
 | GPU | 16 GB VRAM | 96³ patches at batch 64. 24 GB lets you raise the batch size |
-| Disk | **120 GB free** | 28 GB dataset + ~52 GB cache + checkpoints and headroom |
+| Disk | **80 GB free** | 28 GB dataset + 27 GB cache + checkpoints and headroom |
 | RAM | 32 GB | cache building holds whole volumes in memory |
 | Python | 3.11 or 3.12 | both are gated in CI |
 
-The cache is the surprise: **~100 MB per scan × 532 scans ≈ 52 GB**, because
-this pipeline deliberately does *no* downsampling. Do not rent a box with a
-50 GB disk.
+**The cache is 26.4 GB over 522 volumes and builds in about 19 minutes** —
+measured on the rented box during the fold-0 run, over the whole cohort. It is
+float16 at native 0.3 mm; this pipeline deliberately does *no* downsampling, and
+scans average ~48 MB.
 
-That figure is measured, not estimated — 14 cached scans occupy 1,401 MB on the
-development machine. If someone tells you the cache is 25 GB, check it against
-`du -sh` before you believe them; a wrong number here strands you two thirds of
-the way through a build you are paying for by the hour.
+This line used to read "~100 MB per scan × 532 ≈ 52 GB", and that was wrong in a
+way worth keeping on the page. It was extrapolated from the 14 scans cached on
+the development machine — which are the first 14 in alphabetical order, all of
+them from the `ToothFairy3F` cohort, and F scans are among the largest at
+512x512x262. The cohort is 61 F, 381 P and 44 S, so a head-of-list sample of one
+cohort overestimated the mean by a factor of two.
+
+`src/xai/runner.py` already carries the same lesson for a different reason:
+*"Head-truncation (`ids[:n]`) is not a sample."* It applies to disk estimates as
+much as to case selection. Whatever figure you are working from, run `du -sh`
+against a few hundred real files before you rent to it.
 
 ---
 
@@ -207,7 +215,7 @@ molar directly above a lower site claimed it. 414 mandibular sites were marked
 occupied by a maxillary tooth while their own tooth was missing from the mask.
 Occupancy is now a label lookup and `needs_implant` went 530 -> 709.
 
-### 4b. Build the cache — 2–4 h, CPU-bound, ~52 GB
+### 4b. Build the cache — ~19 min on 30 vCPU, ~27 GB
 
 ```bash
 python scripts/build_site_cache.py --config configs/sites.yaml
@@ -215,6 +223,44 @@ python scripts/build_site_cache.py --config configs/sites.yaml
 
 Resumable: re-running skips whatever already exists. Use `--force` only when you
 actually intend to rebuild from scratch.
+
+**Ten of the 532 scans are refused for ambiguous anatomical orientation**,
+leaving 522. That is the builder working: a wrong orientation inverts every
+measurement while still producing clinically plausible numbers, so it declines
+rather than guessing.
+
+### What the rented box actually did, measured on the fold-0 run
+
+- **`/dev/shm` was 64 MB** and could not be remounted inside the container. A
+  batch of 64 patches at 96³ float32 is ~226 MB, and DataLoader workers pass
+  batches through shared memory, so `--num-workers > 0` dies with
+  `unable to allocate shared memory`. PyTorch's `file_system` sharing strategy
+  does **not** help; it still routes through `/dev/shm` on Linux. Use
+  `--num-workers 0`.
+- That costs almost nothing here, because augmentation is disabled for the site
+  task and the loader only slices a memory-mapped array. Measured: GPU bursting
+  to 97% then idling, CPU 96.5% idle — the bottleneck is disk. Epoch time fell
+  118 s to 83 s as the page cache warmed.
+- **A stopped pod restarts into a new container.** `/workspace` persists;
+  `/opt/venv` and `/root` do not. A run died on `ModuleNotFoundError: nibabel`
+  and `TOOTHFAIRY3_ROOT` was gone from `.bashrc`. After any restart:
+  `pip install -r requirements.txt` and re-export the dataset root.
+- Confirmed adequate: 24 GB VRAM (peak 18 GB at batch 64), 30 vCPU. RAM
+  advertised at 64 GB was delivered as 27 GB and did not bind.
+
+### Verify large transfers by checksum, not by size or file count
+
+Three uploads through a JupyterLab browser arrived **truncated at exact
+powers of two** — a 294 MB archive short by exactly 2,097,152 bytes, cache files
+landing at exactly 1 MB and exactly 5 MB. The same files over SSH were
+byte-identical by MD5. Two further faults were caught only by checksum: one
+cache file differed in content while matching in size exactly, which would have
+fed corrupted voxels into training with no error; and a hung `tar` kept writing
+for about an hour after the transfer script reported success.
+
+```bash
+md5sum artifacts_sites/cache/toothfairy3/*.npy > local.md5   # then compare on the box
+```
 
 ### 4c. Train the five folds — the expensive part
 
