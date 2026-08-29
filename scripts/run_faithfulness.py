@@ -38,6 +38,7 @@ from src.xai.faithfulness import (  # noqa: E402
     model_randomization_check,
 )
 from src.xai.runner import (
+    ci_table,
     explanation_target,
     load_case_set,
     load_model,
@@ -301,6 +302,29 @@ def main() -> None:
         print(final.round(4).to_string())
         print()
         print(f"last stage of the cascade: {last_stage!r}")
+
+        # An ordering without intervals is an ordering the data may not support.
+        # Adebayo et al. define no pass/fail cutoff, so no verdict is printed
+        # here -- the intervals are the claim. They are clustered by PATIENT
+        # because several sites come from one jaw; see runner.clustered_ci.
+        if "patient_id" in tail:
+            table = ci_table(tail, "spearman_vs_intact")
+            print()
+            print(f"at_{last_stage} with a 95% interval clustered by patient "
+                  "(lower = decorrelates = more faithful):")
+            print(table.round(4).to_string())
+            overlapping = [
+                (a, b)
+                for i, a in enumerate(table.index) for b in list(table.index)[i + 1:]
+                if table.loc[a, "ci_hi"] >= table.loc[b, "ci_lo"]
+            ]
+            if overlapping:
+                print()
+                print("   intervals OVERLAP, so these pairs are not ordered by the data:")
+                for a, b in overlapping:
+                    print(f"      {a} / {b}")
+            else:
+                print("   no intervals overlap: the ordering above is supported")
 
         undefined = final[final["n_undefined"] > 0]
         if not undefined.empty:

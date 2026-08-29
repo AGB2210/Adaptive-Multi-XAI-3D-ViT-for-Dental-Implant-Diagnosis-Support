@@ -38,6 +38,7 @@ from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
 from src.xai.runner import (
+    ci_table,
     load_case_set,
     load_model,
     require_prerequisites,
@@ -248,6 +249,30 @@ def main() -> None:
     print(f"enrichment 1.0 = chance;  the {primary} mask is {chance:.5%} of the patch")
     print("=" * 78)
     print(agg.round(4).to_string())
+
+    # Medians alone imply an ordering the data may not support. Intervals are
+    # clustered by PATIENT: several sites come from one jaw and share its
+    # anatomy, so resampling rows would narrow these by roughly the square root
+    # of the sites-per-patient ratio. See runner.clustered_ci.
+    for column, note in (("enrichment", "1.0 = chance"),
+                         ("pointing_hit", "0.0 = never hits the structure")):
+        if column not in df:
+            continue
+        table = ci_table(df, column)
+        print()
+        print(f"{column} with a 95% interval clustered by patient ({note}):")
+        print(table.round(4).to_string())
+        null = 1.0 if column == "enrichment" else 0.0
+        indistinguishable = [m for m in table.index
+                             if table.loc[m, "ci_lo"] <= null <= table.loc[m, "ci_hi"]]
+        if indistinguishable:
+            print(f"   interval includes {null}, so not distinguishable from "
+                  f"chance: {indistinguishable}")
+        best = table.index[-1]
+        tied = [m for m in table.index[:-1]
+                if table.loc[m, "ci_hi"] >= table.loc[best, "ci_lo"]]
+        if tied:
+            print(f"   {best} is NOT separated from {tied} -- no best method here")
 
     # The denominator belongs beside the result. This metric is UNDEFINED where
     # the structure is not in the patch -- anterior mandibular sites genuinely

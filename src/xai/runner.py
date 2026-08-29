@@ -408,6 +408,61 @@ def patients_of(ids) -> list[str]:
     return [str(i).split(SITE_SEP)[0] for i in ids]
 
 
+def clustered_ci(frame, value_col: str, patient_col: str = "patient_id",
+                 stat=np.median, n_boot: int = 4000, ci: float = 0.95,
+                 seed: int = 1337) -> tuple[float, float, float]:
+    """(point estimate, lo, hi), resampling PATIENTS rather than rows.
+
+    RESAMPLING ROWS IS WRONG HERE AND THE ERROR IS INVISIBLE IN THE OUTPUT. A
+    patient contributes up to fourteen mandibular sites that share anatomy,
+    field of view, scanner and annotator, so those rows are not independent
+    draws. Treating them as if they were narrows the interval by roughly the
+    square root of the sites-per-patient ratio, and the result then looks more
+    certain than the data supports while nothing on the page says so.
+
+    It is the same fault as `ids[:n]` in `select_cases`, one level up: there the
+    sample was not a sample, here the resample is not a resample. `patients_of`
+    was written for this and went unused for two releases.
+
+    `stat` is applied to the pooled values of the resampled patients, so a
+    patient with more sites carries more weight -- which is the right thing when
+    the estimate itself is over sites rather than over patients.
+
+    Returns NaN when nothing finite survives. Callers must not turn that into a
+    zero: no interval and an interval of zero width are opposite claims.
+    """
+    groups = [g[value_col].to_numpy(dtype=float) for _, g in frame.groupby(patient_col)]
+    groups = [g[np.isfinite(g)] for g in groups]
+    groups = [g for g in groups if g.size]
+    if not groups:
+        return float("nan"), float("nan"), float("nan")
+
+    rng = np.random.default_rng(seed)
+    k = len(groups)
+    point = float(stat(np.concatenate(groups)))
+    draws = np.empty(n_boot, dtype=float)
+    for b in range(n_boot):
+        draws[b] = stat(np.concatenate([groups[i] for i in rng.integers(0, k, k)]))
+    lo, hi = np.percentile(draws, [100 * (1 - ci) / 2, 100 * (1 + ci) / 2])
+    return point, float(lo), float(hi)
+
+
+def ci_table(frame, value_col: str, group_col: str = "method", **kw):
+    """`clustered_ci` per method, sorted, ready to print beside the medians.
+
+    Report this instead of a bare ordering. Two methods whose intervals overlap
+    are not ranked by the data, however far apart their medians look, and that
+    is a statement the medians alone cannot make.
+    """
+    rows = []
+    for name, g in frame.groupby(group_col):
+        point, lo, hi = clustered_ci(g, value_col, **kw)
+        rows.append({group_col: name, value_col: point, "ci_lo": lo, "ci_hi": hi,
+                     "patients": int(g[kw.get("patient_col", "patient_id")].nunique()),
+                     "n": int(len(g))})
+    return pd.DataFrame(rows).set_index(group_col).sort_values(value_col)
+
+
 def explanation_target(cfg, spec=None, outputs=None) -> int:
     """Which output column to explain.
 
