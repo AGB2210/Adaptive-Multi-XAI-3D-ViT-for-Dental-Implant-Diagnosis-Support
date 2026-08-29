@@ -1,0 +1,122 @@
+{
+  "val": {
+    "classification": {
+      "per_label": {
+        "needs_implant": {
+          "auroc": 0.9539781143427988,
+          "ap": 0.7987695336341858,
+          "f1": 0.7516339869281046,
+          "threshold": 0.6924599933997526,
+          "n_pos": 146,
+          "prevalence": 0.10903659462928772,
+          "auroc_ci": [
+            0.9325592842994526,
+            0.9721552157823581
+          ],
+          "ap_ci": [
+            0.729068823158741,
+            0.861656007170677
+          ],
+          "f1_ci": [
+            0.6938775510204082,
+            0.802547770700637
+          ]
+        }
+      },
+      "thresholds": {
+        "needs_implant": 0.6924599933997526
+      },
+      "macro_auroc": 0.9539781143427988,
+      "macro_ap": 0.7987695336341858,
+      "macro_f1": 0.7516339869281046,
+      "macro_auroc_ci": [
+        0.932309865400497,
+        0.9730311042288247
+      ]
+    },
+    "regression": {
+      "available_height_mm": {
+        "mae": 3.7344419956207275,
+        "rmse": 5.262964725494385,
+        "mae_floor": 7.042942523956299,
+        "rmse_floor": 8.086105346679688,
+        "n": 1339
+      },
+      "ridge_width_mm": {
+        "mae": 2.5569779872894287,
+        "rmse": 3.2844979763031006,
+        "mae_floor": 3.6804332733154297,
+        "rmse_floor": 4.484114170074463,
+        "n": 1339
+      }
+    },
+    "threshold_sensitivity": [
+      {
+        "height_threshold_mm": 10.0,
+        "measured_feasible_rate": 0.6811053156852722,
+        "predicted_feasible_rate": 0.8566094040870667,
+        "agreement": 0.6975354742345033,
+        "n": 1339
+      },
+      {
+        "height_threshold_mm": 11.0,
+        "measured_feasible_rate": 0.6340552568435669,
+        "predicted_feasible_rate": 0.7991037964820862,
+        "agreement": 0.6811053024645257,
+        "n": 1339
+      },
+      {
+        "height_threshold_mm": 12.0,
+        "measured_feasible_rate": 0.5967139601707458,
+        "predicted_feasible_rate": 0.7147125005722046,
+        "agreement": 0.6669156086631814,
+        "n": 1339
+      },
+      {
+        "height_threshold_mm": 13.0,
+        "measured_feasible_rate": 0.5369678735733032,
+        "predicted_feasible_rate": 0.6049290299415588,
+        "agreement": 0.6766243465272591,
+        "n": 1339
+      },
+      {
+        "height_threshold_mm": 14.0,
+        "measured_feasible_rate": 0.48917102813720703,
+        "predicted_feasible_rate": 0.5309932827949524,
+        "agreement": 0.672890216579537,
+        "n": 1339
+      }
+    ]
+  },
+  "n_params": 5791301,
+  "model": "vit3d",
+  "labels": [
+    "needs_implant",
+    "available_height_mm",
+    "ridge_width_mm"
+  ],
+  "binary": [
+    "needs_implant"
+  ],
+  "millimetres": [
+    "available_height_mm",
+    "ridge_width_mm"
+  ],
+  "target_spec": {
+    "binary": [
+      "needs_implant"
+    ],
+    "millimetres": [
+      "available_height_mm",
+      "ridge_width_mm"
+    ],
+    "mean": [
+      17.983941090395444,
+      9.833341861071315
+    ],
+    "std": [
+      7.867267516117315,
+      4.343942986846669
+    ]
+  }
+}

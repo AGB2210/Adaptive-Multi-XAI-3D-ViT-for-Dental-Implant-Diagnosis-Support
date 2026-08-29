@@ -1,0 +1,10 @@
+{
+  "temperature": 1.2565771341323853,
+  "ece_before": 0.03876392556409351,
+  "ece_after": 0.04925378578032705,
+  "n_val_patients": 1339,
+  "fitted_on": "validation split only",
+  "calibrated_labels": [
+    "needs_implant"
+  ]
+}
