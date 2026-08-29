@@ -76,6 +76,17 @@ def main() -> None:
     ap.add_argument("--only-randomization", dest="only_randomization", action="store_true",
                     help="skip the deletion/insertion sweep and redo only the sanity check, "
                          "reusing the existing results_faithfulness.csv")
+    ap.add_argument("--baseline", default="blur", choices=["blur", "mean", "zero"],
+                    help="what a deleted voxel is replaced with. The default blur is "
+                         "sigma=4 voxels = 1.2 mm at 0.3 mm, which removes TEXTURE and "
+                         "leaves geometry -- and the explained head is a crest-to-canal "
+                         "DISTANCE, so a deleted region still carries the measurement. "
+                         "Use 'mean' to destroy geometry")
+    ap.add_argument("--score", default="response", choices=["response", "deviation"],
+                    help="what the curve integrates. 'response' is the model output, "
+                         "correct for a probability. 'deviation' is minus the distance "
+                         "from the full-input prediction, which is the reading a "
+                         "millimetre head needs -- see deletion_insertion")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
     args = ap.parse_args()
 
@@ -137,7 +148,7 @@ def main() -> None:
     for case_index, pid in enumerate(todo):
         started = time.perf_counter()
         volume = cases.load(pid, device)
-        baseline = make_baseline(volume, "blur")
+        baseline = make_baseline(volume, args.baseline, mean_volume=mean_volume)
         mask = bone_mask(volume)
 
         with torch.no_grad():
@@ -154,7 +165,8 @@ def main() -> None:
             maps[name] = saliency
             result = deletion_insertion(model, volume, saliency, target,
                                         baseline=baseline, steps=args.steps,
-                                        target_is_probability=target < n_bin)
+                                        target_is_probability=target < n_bin,
+                                        score=args.score)
             results[name] = result
             plausibility = bone_mass_fraction(saliency, mask)
 
@@ -169,6 +181,11 @@ def main() -> None:
                 "true_value": (float(y[case_index, target])
                                if target < y.shape[1] else float("nan")),
                 "target_unit": "probability" if target < n_bin else "mm",
+                # In the row, because a deletion AUC means nothing without them
+                # and two runs with different settings are otherwise
+                # indistinguishable in the CSV.
+                "baseline_kind": args.baseline,
+                "score": args.score,
                 "method": name,
                 "deletion_auc": result["deletion_auc"],
                 "insertion_auc": result["insertion_auc"],

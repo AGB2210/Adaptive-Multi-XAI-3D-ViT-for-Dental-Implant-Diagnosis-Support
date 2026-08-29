@@ -81,6 +81,17 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--uncertainty", default="margin", choices=["margin", "entropy"])
     ap.add_argument("--ensemble-fraction", dest="ensemble_fraction", type=float, default=0.3)
+    ap.add_argument("--baseline", default="blur", choices=["blur", "mean", "zero"],
+                    help="what a deleted voxel is replaced with. The default blur is "
+                         "sigma=4 voxels = 1.2 mm at 0.3 mm, which removes TEXTURE and "
+                         "leaves geometry -- and the explained head is a crest-to-canal "
+                         "DISTANCE, so a deleted region still carries the measurement. "
+                         "Use 'mean' to destroy geometry")
+    ap.add_argument("--score", default="response", choices=["response", "deviation"],
+                    help="what the curve integrates. 'response' is the model output, "
+                         "correct for a probability. 'deviation' is minus the distance "
+                         "from the full-input prediction, which is the reading a "
+                         "millimetre head needs -- see deletion_insertion")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
     args = ap.parse_args()
 
@@ -183,14 +194,15 @@ def main() -> None:
     for i, pid in enumerate([] if args.from_csv else ids):
         row = row_of[pid]
         volume = cases.load(pid, device)
-        baseline = make_baseline(volume, "blur")
+        baseline = make_baseline(volume, args.baseline, mean_volume=mean_volume)
         target = explanation_target(cfg, spec, test_report[row])
 
         maps = {name: method.attribute(volume, target) for name, method in methods.items()}
         result = fuse(model, volume, maps, target,
                       weight_metric=WEIGHT_METRIC, eval_metric=EVAL_METRIC,
                       steps=args.steps, baseline=baseline,
-                      target_is_probability=target < len(bin_names))
+                      target_is_probability=target < len(bin_names),
+                      score=args.score)
 
         rows.append({
             "patient_id": pid,
@@ -205,6 +217,8 @@ def main() -> None:
             "routed_to_ensemble": gate.use_ensemble(test_uncertainty[row]),
             "weight_metric": WEIGHT_METRIC,
             "eval_metric": EVAL_METRIC,
+            "baseline_kind": args.baseline,
+            "score": args.score,
             "fused_eval": result["fused_eval"],
             "uniform_eval": result["uniform_eval"],
             "beats_best_individual": result["beats_best_individual"],

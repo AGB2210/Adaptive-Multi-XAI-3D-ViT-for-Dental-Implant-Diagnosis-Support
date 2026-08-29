@@ -336,3 +336,86 @@ def test_the_default_still_reads_a_binary_head_as_a_probability(model, volume):
     result = deletion_insertion(model, volume, saliency, target_label=1, steps=8)
     assert 0.0 <= result["deletion_auc"] <= 1.0
     assert 0.0 <= result["insertion_auc"] <= 1.0
+
+
+def test_deviation_scores_distance_from_the_full_input_prediction(model, volume):
+    """The reading a millimetre head needs.
+
+    Deletion/insertion assumes a score that rises with evidence for the target.
+    A length is not that: deleting voxels moves a millimetre prediction toward
+    whatever the baseline implies, which may be larger or smaller, so the raw
+    response has no reason to fall. `score="deviation"` integrates minus the
+    distance from the full-input prediction instead, which restores the metric's
+    own semantics -- it starts at 0 and falls as the prediction is pulled away.
+    """
+    torch.manual_seed(5)
+    saliency = torch.rand(volume.shape[2:])
+    raw = deletion_insertion(model, volume, saliency, target_label=0, steps=8,
+                             target_is_probability=False)
+    dev = deletion_insertion(model, volume, saliency, target_label=0, steps=8,
+                             target_is_probability=False, score="deviation")
+
+    curve = np.array(dev["deletion_curve"])
+    assert (curve <= 1e-5).all(), "deviation is a negated absolute value; it cannot be positive"
+    with torch.no_grad():
+        reference = float(model(volume)[0, 0])
+    assert np.allclose(curve, -np.abs(np.array(raw["deletion_curve"]) - reference), atol=1e-5)
+    # Nothing deleted yet: the prediction is the full-input one, so distance 0.
+    assert curve[0] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_an_unknown_score_is_refused(model, volume):
+    torch.manual_seed(6)
+    with pytest.raises(ValueError, match="score must be"):
+        deletion_insertion(model, volume, torch.rand(volume.shape[2:]),
+                           target_label=0, steps=4, score="absolute")
+
+
+def test_a_blur_baseline_leaves_a_crest_to_canal_distance_readable():
+    """Why the baseline is the prime suspect in the flat deletion/insertion result.
+
+    The default baseline is a blur at sigma=4 voxels, which at 0.3 mm is 1.2 mm.
+    The explained head is `available_height_mm`, and available height in the
+    mandible IS crest-to-canal distance. This builds that geometry -- a bright
+    slab of bone with a dark tube inside it -- and checks what each baseline
+    does to the measurement, not to the pixels.
+
+    The blur is supposed to be a "deleted" input. If the distance survives it,
+    then deleting the most salient voxels hands the model something that still
+    answers the question, the response barely moves, and every method scores the
+    same constant. That is exactly the shape the fold-0 run reported.
+    """
+    from src.xai.base import make_baseline
+
+    n = 96
+    vol = torch.zeros(1, 1, n, n, n)
+    vol[..., 20:80] = 1.0          # bone slab: crest at z = 20
+    vol[..., 48:56] = -1.0         # canal: a dark band, roof at z = 48
+
+    def crest_to_canal(v: torch.Tensor) -> int:
+        """Top of the bright block down to the darkest point below it."""
+        profile = v[0, 0].mean(dim=(0, 1))
+        crest = int((profile > 0.5 * float(profile.max())).nonzero()[0])
+        canal = int(profile[crest:].argmin()) + crest
+        return canal - crest
+
+    sharp = crest_to_canal(vol)
+    assert sharp == 28
+
+    # The tolerance is sigma, not a round number: a Gaussian of sigma=4 voxels
+    # can move a landmark by about that much and no more. Surviving to within
+    # one sigma is the claim -- the blur perturbs the measurement, it does not
+    # remove it.
+    blurred = crest_to_canal(make_baseline(vol, "blur"))
+    assert abs(blurred - sharp) <= 4, (
+        f"crest-to-canal went {sharp} -> {blurred} voxels under the blur "
+        f"baseline. It was expected to survive to within one sigma; if it no "
+        f"longer does, the blur is harsher than the argument in "
+        f"deletion_insertion assumes and that argument needs revisiting"
+    )
+
+    flat = make_baseline(vol, "mean", mean_volume=torch.full_like(vol, float(vol.mean())))
+    assert float(flat.std()) == pytest.approx(0.0, abs=1e-6), (
+        "the mean baseline must carry no geometry at all -- that is the point "
+        "of re-running the diagnosis with it"
+    )

@@ -108,6 +108,7 @@ def deletion_insertion(
     batch_size: int = 8,
     baseline_kind: str = "blur",
     target_is_probability: bool = True,
+    score: str = "response",
 ) -> dict:
     """Deletion and insertion curves and their AUCs.
 
@@ -124,7 +125,32 @@ def deletion_insertion(
     millimetres would be an affine map, which cannot reorder anything, so the
     raw output is used directly and every comparison here is exactly the
     comparison you would get in millimetres.
+
+    `score` decides WHAT is integrated, and on a regression head the default is
+    the wrong choice:
+
+    * `"response"` -- the model's output itself. Correct for a probability,
+      where "removing evidence for the class lowers the score" is what the
+      metric assumes.
+    * `"deviation"` -- minus the absolute distance from the FULL-INPUT
+      prediction. A length is not a confidence: deleting voxels moves a
+      millimetre prediction toward whatever the baseline implies, which may be
+      larger or smaller, so there is no reason the raw response should fall. The
+      deviation restores the metric's own semantics -- it starts at 0 with
+      nothing deleted, and falls as the prediction is pulled away from the one
+      the full image produced. Deletion should fall fast, insertion should rise,
+      and lower/higher-is-better is unchanged.
+
+    On the fold-0 run all four methods landed at deletion approximately equal to
+    insertion, within 0.013 of each other, which is what a FLAT response looks
+    like: if the output barely moves across the sweep, both AUCs converge on the
+    same constant for every map. Two candidate causes, and this argument is why
+    both knobs exist -- `score="deviation"` here, and a baseline that destroys
+    geometry rather than texture (the blur default is 1.2 mm at 0.3 mm spacing,
+    which leaves a crest-to-canal distance perfectly readable).
     """
+    if score not in ("response", "deviation"):
+        raise ValueError(f"score must be 'response' or 'deviation', got {score!r}")
     model.eval()
     device = volume.device
     if baseline is None:
@@ -133,6 +159,12 @@ def deletion_insertion(
     n_voxels = saliency.numel()
     order = torch.argsort(saliency.reshape(-1), descending=True)
     per_step = max(1, n_voxels // steps)
+
+    reference = None
+    if score == "deviation":
+        full = model(volume)[:, target_label]
+        reference = torch.sigmoid(full) if target_is_probability else full
+        reference = float(reference.reshape(-1)[0])
 
     def run(start_from_baseline: bool) -> np.ndarray:
         probs = []
@@ -150,6 +182,12 @@ def deletion_insertion(
             logits = model(torch.cat(batch, dim=0))
             response = (torch.sigmoid(logits[:, target_label]) if target_is_probability
                         else logits[:, target_label])
+            if reference is not None:
+                # Negated so that "more of the original prediction survives" is
+                # still the larger number, which keeps deletion-lower-is-better
+                # and insertion-higher-is-better pointing the same way as for a
+                # probability.
+                response = -(response - reference).abs()
             probs.append(response.cpu().numpy())
         return np.concatenate(probs)
 

@@ -93,6 +93,10 @@ def main() -> None:
                          "attribution and still non-deterministic in attention")
     ap.add_argument("--per-group", dest="per_group", type=int, default=2)
     ap.add_argument("--steps", type=int, default=50)
+    ap.add_argument("--baseline", default="blur", choices=["blur", "mean", "zero"],
+                    help="must match the run_faithfulness settings the figures illustrate")
+    ap.add_argument("--score", default="response", choices=["response", "deviation"],
+                    help="must match the run_faithfulness settings the figures illustrate")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
     args = ap.parse_args()
 
@@ -146,13 +150,13 @@ def main() -> None:
         for pid in members:
             i = index[pid]
             volume = cases.load(pid, device)
-            baseline = make_baseline(volume, "blur")
+            baseline = make_baseline(volume, args.baseline, mean_volume=mean_volume)
             target = explanation_target(cfg, spec, probs[i])
 
             maps = {n: m.attribute(volume, target) for n, m in methods.items()}
             result = fuse(model, volume, maps, target, weight_metric=WEIGHT_METRIC,
                           eval_metric=EVAL_METRIC, steps=args.steps, baseline=baseline,
-                          target_is_probability=target < n_bin)
+                          target_is_probability=target < n_bin, score=args.score)
             maps["fused"] = result["fused_map"]
 
             scores = dict(result["per_method_eval"])
@@ -176,6 +180,8 @@ def main() -> None:
                 "group": group, "patient_id": pid, "target_label": label_names[target],
                 "target_value": float(probs[i, target]),
                 "target_unit": "probability" if target < n_bin else "mm",
+                "baseline_kind": args.baseline,
+                "score": args.score,
                 "predicted": "|".join(predicted), "true": "|".join(truth),
                 "fused_eval": result["fused_eval"], "figure": str(path),
             })

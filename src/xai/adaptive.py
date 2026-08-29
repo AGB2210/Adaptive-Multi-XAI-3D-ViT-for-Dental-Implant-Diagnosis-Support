@@ -83,13 +83,15 @@ def score_methods(
     steps: int = 50,
     baseline: torch.Tensor | None = None,
     target_is_probability: bool = True,
+    score: str = "response",
 ) -> dict[str, float]:
     """Faithfulness score per method on one input, using `metric` only."""
     scores = {}
     for name, saliency in maps.items():
         result = deletion_insertion(model, volume, saliency, target_label,
                                     baseline=baseline, steps=steps,
-                                    target_is_probability=target_is_probability)
+                                    target_is_probability=target_is_probability,
+                                    score=score)
         scores[name] = result[metric]
     return scores
 
@@ -105,12 +107,15 @@ def fuse(
     steps: int = 50,
     baseline: torch.Tensor | None = None,
     target_is_probability: bool = True,
+    score: str = "response",
 ) -> dict:
     """Agreement-weighted fusion with the circularity guard enforced.
 
     `target_is_probability=False` when the explained head is a millimetre head
     -- see `deletion_insertion`. Both the weighting and the held-out evaluation
-    have to read the same units, so it is one flag for the whole call.
+    have to read the same units, so it is one flag for the whole call, and the
+    same goes for `score`: weighting on one reading of the curve and evaluating
+    on another would make the two incomparable.
     """
     if weight_metric == eval_metric:
         raise ValueError(
@@ -119,14 +124,15 @@ def fuse(
         )
 
     scores = score_methods(model, volume, maps, target_label, weight_metric, steps, baseline,
-                           target_is_probability=target_is_probability)
+                           target_is_probability=target_is_probability, score=score)
     weights = softmax_weights(scores, weight_metric, temperature)
     fused = fuse_maps(maps, weights)
 
     uniform = fuse_maps(maps, uniform_weights(maps))
 
     # Evaluate everything on the held-out metric.
-    di = dict(baseline=baseline, steps=steps, target_is_probability=target_is_probability)
+    di = dict(baseline=baseline, steps=steps,
+              target_is_probability=target_is_probability, score=score)
     fused_eval = deletion_insertion(model, volume, fused, target_label, **di)
     uniform_eval = deletion_insertion(model, volume, uniform, target_label, **di)
     per_method_eval = {
