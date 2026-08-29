@@ -408,6 +408,50 @@ def patients_of(ids) -> list[str]:
     return [str(i).split(SITE_SEP)[0] for i in ids]
 
 
+def clustered_ci(frame, value_col: str, patient_col: str = "patient_id",
+                 stat=np.median, n_boot: int = 4000, ci: float = 0.95,
+                 seed: int = 1337):
+    """(point estimate, lo, hi) resampling PATIENTS, not rows.
+
+    RESAMPLING ROWS IS WRONG HERE AND THE ERROR IS INVISIBLE. A patient
+    contributes up to fourteen mandibular sites that share anatomy, field of
+    view, scanner and annotator. Treating them as independent draws narrows the
+    interval by roughly the square root of the sites-per-patient ratio, so a
+    result reported that way looks more certain than the data supports and
+    nothing in the output says so.
+
+    This is the same fault as `ids[:n]` head-truncation, one level up: there the
+    sample was not a sample, here the resample is not a resample.
+
+    Returns nan when nothing is finite -- callers must not turn that into a zero.
+    """
+    groups = [g[value_col].to_numpy(dtype=float) for _, g in frame.groupby(patient_col)]
+    groups = [g[np.isfinite(g)] for g in groups]
+    groups = [g for g in groups if g.size]
+    if not groups:
+        return float("nan"), float("nan"), float("nan")
+
+    rng = np.random.default_rng(seed)
+    k = len(groups)
+    point = float(stat(np.concatenate(groups)))
+    draws = np.empty(n_boot, dtype=float)
+    for b in range(n_boot):
+        pick = rng.integers(0, k, k)
+        draws[b] = stat(np.concatenate([groups[i] for i in pick]))
+    lo, hi = np.percentile(draws, [100 * (1 - ci) / 2, 100 * (1 + ci) / 2])
+    return point, float(lo), float(hi)
+
+
+def ci_table(frame, value_col: str, group_col: str = "method", **kw):
+    """`clustered_ci` per method, as a frame ready to print beside the medians."""
+    rows = []
+    for name, g in frame.groupby(group_col):
+        point, lo, hi = clustered_ci(g, value_col, **kw)
+        rows.append({group_col: name, value_col: point, "ci_lo": lo, "ci_hi": hi,
+                     "patients": int(g["patient_id"].nunique())})
+    return pd.DataFrame(rows).set_index(group_col).sort_values(value_col)
+
+
 def explanation_target(cfg, spec=None, outputs=None) -> int:
     """Which output column to explain.
 

@@ -38,6 +38,7 @@ from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
 from src.xai.runner import (
+    ci_table,
     load_case_set,
     load_model,
     require_prerequisites,
@@ -249,6 +250,25 @@ def main() -> None:
     print("=" * 78)
     print(agg.round(4).to_string())
 
+    # Intervals resample PATIENTS, not rows: a patient contributes up to
+    # fourteen sites that share anatomy, field of view and annotator, so a
+    # row-wise bootstrap would report more certainty than the data supports.
+    for column, note in (("enrichment", "chance = 1.0"),
+                         ("pointing_hit", "rate; chance is the mask fraction")):
+        stat = np.mean if column == "pointing_hit" else np.median
+        tab = ci_table(df, column, stat=stat)
+        print("")
+        print(f"{column} with 95% CI clustered by patient  ({note})")
+        for method, r in tab.iterrows():
+            flag = ""
+            if column == "enrichment":
+                if r.ci_lo > 1.0:
+                    flag = "  <- interval excludes chance"
+                elif r.ci_hi >= 1.0 >= r.ci_lo:
+                    flag = "  <- includes chance"
+            print(f"  {method:<22} {r[column]:7.4f}  "
+                  f"[{r.ci_lo:7.4f}, {r.ci_hi:7.4f}]  n={int(r.patients)} patients{flag}")
+
     # The denominator belongs beside the result. This metric is UNDEFINED where
     # the structure is not in the patch -- anterior mandibular sites genuinely
     # have no canal above them -- and quoting a mean over the cases where it
@@ -270,7 +290,11 @@ def main() -> None:
         print(f"\n{primary} enrichment / {other} enrichment "
               f"(median over {sub['case_id'].nunique()} cases with both present)")
         print("  > 1 means the explanation prefers the " + primary)
-        print(sub.groupby("method")[col].median().round(3).to_string())
+        tab = ci_table(sub, col)
+        for method, r in tab.iterrows():
+            verdict = (f"prefers {primary}" if r.ci_lo > 1.0 else
+                       f"prefers {other}" if r.ci_hi < 1.0 else "no clear preference")
+            print(f"  {method:<22} {r[col]:6.3f}  [{r.ci_lo:6.3f}, {r.ci_hi:6.3f}]   {verdict}")
 
     print(f"\nwrote {out}")
 
