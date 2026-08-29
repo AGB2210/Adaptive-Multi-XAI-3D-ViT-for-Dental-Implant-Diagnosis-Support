@@ -135,3 +135,80 @@ def test_localization_scores_reports_every_metric(mask):
         assert key in out
     assert out["pointing_hit"] is True
     assert out["mask_voxels"] == int(mask.sum())
+
+
+class TestTheCeilingControlPremise:
+    """What the not-yet-written achievable-ceiling control must be built on.
+
+    The control is meant to put a denominator under every enrichment figure by
+    running the methods on the synthetic planted-signal task, where the correct
+    answer is known exactly. Two premises have to hold before its numbers
+    transfer to the real localisation table, and only one of them is obvious.
+    """
+
+    def test_the_millimetre_heads_get_continuous_targets_not_zero_and_one(self):
+        """A regression head trained on 0/1 would make the ceiling meaningless.
+
+        `make_hybrid_dataset` builds each millimetre column as a linear function
+        of one planted binary signal, scaled to a clinical range, precisely so
+        the gate trains a regression head on lengths rather than on labels. This
+        pins that, because it is the kind of thing that quietly reverts.
+        """
+        from tests.synthetic import make_hybrid_dataset
+
+        _, y = make_hybrid_dataset(40, seed=0, shape=(32, 32, 32))
+        assert set(np.unique(y[:, 0])) <= {0.0, 1.0}, "the binary column should be binary"
+        for j in (1, 2):
+            col = y[:, j]
+            assert len(np.unique(np.round(col, 3))) > 30, (
+                f"millimetre column {j} takes {len(np.unique(np.round(col, 3)))} "
+                f"distinct values across 40 cases -- a regression head is being "
+                f"trained on something close to labels, and an enrichment "
+                f"ceiling measured on it would not transfer"
+            )
+            assert col.std() > 1.0 and col.min() > 0.0
+
+    def test_the_planted_blob_is_a_far_easier_target_than_the_canal(self):
+        """The premise that does NOT hold, quantified.
+
+        Enrichment is bounded by resolution: a method that can only place mass
+        at token granularity cannot concentrate it inside a structure thinner
+        than a token. So a ceiling only transfers between two targets of similar
+        SHAPE, not merely similar volume.
+
+        A token here is `patch_size` 4 times the conv stem's stride 2, so 8
+        input voxels = 2.4 mm at 0.3 mm spacing.
+
+            planted blob   0.71% of the patch, compact sphere, ~2.9 tokens across
+            nerve canal    0.48% of the patch, long tube,      ~0.94 tokens across
+
+        Comparable fractions, and the reason they are not interchangeable is the
+        aspect ratio. A ceiling measured on the blob would be optimistic and
+        would make GradCAM and rollout look worse than the resolution allows.
+        Whoever writes the control must plant a TUBE of the canal's cross
+        section, not the existing sphere.
+        """
+        from tests.synthetic import signal_mask
+
+        patch, spacing, token_voxels = 96, 0.3, 8
+        blob = signal_mask(np.array([1, 0, 0]), shape=(patch, patch, patch))
+        blob_fraction = float(blob.mean())
+        blob_radius = (3 * blob.sum() / (4 * np.pi)) ** (1 / 3)
+
+        canal_fraction = 0.00478           # measured, run_localization prints it
+        cross_section = canal_fraction * patch ** 3 / patch
+        canal_radius = (cross_section / np.pi) ** 0.5
+
+        assert 0.5 < blob_fraction / canal_fraction < 2.0, (
+            "volumes are comparable -- that is what makes the shape difference "
+            "easy to miss"
+        )
+        blob_tokens = 2 * blob_radius / token_voxels
+        canal_tokens = 2 * canal_radius / token_voxels
+        assert blob_tokens > 2.0
+        assert canal_tokens < 1.0, (
+            f"the canal is {canal_tokens:.2f} tokens across against the blob's "
+            f"{blob_tokens:.2f}. If this ever stops holding, re-derive the "
+            f"ceiling argument rather than assuming it still applies"
+        )
+        assert spacing * token_voxels == pytest.approx(2.4)

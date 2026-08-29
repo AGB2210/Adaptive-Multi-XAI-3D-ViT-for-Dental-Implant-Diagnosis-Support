@@ -45,6 +45,28 @@ is known exactly, and report enrichment relative to what each method can reach
 at its own resolution. Without it, "3.2x enrichment" has no denominator. Not
 implemented yet; it is CPU-only and cheap, and it would strengthen every
 localisation result in the paper.
+
+BUT IT CANNOT BE BUILT ON THE EXISTING PLANTED SIGNAL UNCHANGED. Enrichment is
+bounded by resolution, so a ceiling transfers between two targets only if they
+have a similar SHAPE, not merely a similar volume. A token here is `patch_size`
+4 times the conv stem's stride 2, so 8 input voxels, which is 2.4 mm:
+
+    planted blob   0.71% of the patch, compact sphere, ~2.9 tokens across
+    nerve canal    0.48% of the patch, long thin tube, ~0.94 tokens across
+
+The fractions are within 1.5x of each other, which is exactly what makes this
+easy to miss. The aspect ratios are not close at all: a method that places mass
+at token granularity can fill a three-token sphere and cannot fill a sub-token
+tube. A ceiling measured on the blob would come out optimistic, and every real
+method -- GradCAM and rollout worst -- would be scored against a bar their
+resolution never allowed them to reach.
+
+Whoever writes the control must plant a TUBE with the canal's cross section.
+`tests/test_localization.py::TestTheCeilingControlPremise` pins both numbers so
+the premise is checked rather than assumed. The second premise, that the
+synthetic millimetre heads are trained on lengths rather than on 0/1, does
+already hold -- see `tests/synthetic.make_hybrid_dataset` -- and is pinned in
+the same place.
 """
 
 from __future__ import annotations
