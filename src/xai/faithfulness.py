@@ -108,6 +108,7 @@ def deletion_insertion(
     batch_size: int = 8,
     baseline_kind: str = "blur",
     target_is_probability: bool = True,
+    absolute_change: bool = False,
 ) -> dict:
     """Deletion and insertion curves and their AUCs.
 
@@ -124,6 +125,25 @@ def deletion_insertion(
     millimetres would be an affine map, which cannot reorder anything, so the
     raw output is used directly and every comparison here is exactly the
     comparison you would get in millimetres.
+
+    `absolute_change=True` scores |f(perturbed) - f(full input)| instead of the
+    raw response. THIS IS NOT COSMETIC ON A REGRESSION HEAD.
+
+    Deletion/insertion is defined for a score that RISES with evidence for a
+    target class, so "the response should fall as evidence is removed" is
+    meaningful. A length has no such direction: removing voxels moves a
+    millimetre prediction toward whatever the baseline implies, which may be
+    larger or smaller than the truth. Averaged over cases the signed movements
+    cancel, and every method lands on the same near-constant AUC -- which is
+    exactly the pattern the first fold-0 run produced, deletion approximately
+    equal to insertion at approximately 0.41 for all four methods, spread 0.013.
+
+    Under `absolute_change` the quantity is "how far did the prediction move",
+    which is directional for a length. A faithful map should move it FAR when
+    its own top voxels are deleted, so for this mode HIGHER deletion_auc is
+    better -- the opposite of the probability convention. The returned keys are
+    unchanged so callers do not silently switch meaning; the caller must record
+    which mode produced the file.
     """
     model.eval()
     device = volume.device
@@ -133,6 +153,11 @@ def deletion_insertion(
     n_voxels = saliency.numel()
     order = torch.argsort(saliency.reshape(-1), descending=True)
     per_step = max(1, n_voxels // steps)
+
+    with torch.no_grad():
+        full_logits = model(volume if volume.dim() == 5 else volume.unsqueeze(0))
+        reference = (torch.sigmoid(full_logits[:, target_label]) if target_is_probability
+                     else full_logits[:, target_label]).item()
 
     def run(start_from_baseline: bool) -> np.ndarray:
         probs = []
@@ -151,7 +176,8 @@ def deletion_insertion(
             response = (torch.sigmoid(logits[:, target_label]) if target_is_probability
                         else logits[:, target_label])
             probs.append(response.cpu().numpy())
-        return np.concatenate(probs)
+        out = np.concatenate(probs)
+        return np.abs(out - reference) if absolute_change else out
 
     deletion = run(start_from_baseline=False)
     insertion = run(start_from_baseline=True)
@@ -163,6 +189,8 @@ def deletion_insertion(
         "deletion_curve": deletion.tolist(),
         "insertion_curve": insertion.tolist(),
         "fractions": fractions.tolist(),
+        "absolute_change": bool(absolute_change),
+        "reference_response": float(reference),
     }
 
 

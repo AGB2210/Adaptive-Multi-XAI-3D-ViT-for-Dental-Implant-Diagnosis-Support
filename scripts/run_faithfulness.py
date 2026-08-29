@@ -38,6 +38,7 @@ from src.xai.faithfulness import (  # noqa: E402
     model_randomization_check,
 )
 from src.xai.runner import (
+    ci_table,
     explanation_target,
     load_case_set,
     load_model,
@@ -70,6 +71,17 @@ def main() -> None:
     ap.add_argument("--split", default="test")
     ap.add_argument("--n-cases", dest="n_cases", type=int, default=None,
                     help="default comes from xai.faithfulness_cases in the config")
+    ap.add_argument("--baseline", default="blur", choices=["blur", "mean"],
+                    help="what deleted voxels are replaced with. 'blur' (sigma 4.0 = "
+                         "1.2 mm at 0.3 mm) preserves gross geometry, which is the "
+                         "quantity available_height_mm regresses -- so a flat response "
+                         "is expected and says nothing about the map. 'mean' destroys "
+                         "geometry and is the control.")
+    ap.add_argument("--absolute-change", dest="absolute_change", action="store_true",
+                    help="score |f(perturbed) - f(full input)| instead of the raw "
+                         "response. For a length the signed movement has no direction "
+                         "and cancels across cases; the magnitude does not. NOTE this "
+                         "REVERSES the deletion convention: higher is then better.")
     ap.add_argument("--steps", type=int, default=100, help="deletion/insertion steps (~1%% each)")
     ap.add_argument("--randomization-cases", dest="rand_cases", type=int, default=None,
                     help="default comes from xai.randomization_cases in the config")
@@ -137,7 +149,7 @@ def main() -> None:
     for case_index, pid in enumerate(todo):
         started = time.perf_counter()
         volume = cases.load(pid, device)
-        baseline = make_baseline(volume, "blur")
+        baseline = make_baseline(volume, args.baseline, mean_volume=mean_volume)
         mask = bone_mask(volume)
 
         with torch.no_grad():
@@ -154,6 +166,7 @@ def main() -> None:
             maps[name] = saliency
             result = deletion_insertion(model, volume, saliency, target,
                                         baseline=baseline, steps=args.steps,
+                                        absolute_change=args.absolute_change,
                                         target_is_probability=target < n_bin)
             results[name] = result
             plausibility = bone_mass_fraction(saliency, mask)
@@ -284,6 +297,27 @@ def main() -> None:
         print(final.round(4).to_string())
         print()
         print(f"last stage of the cascade: {last_stage!r}")
+
+        # The final stage is the claim, so it gets an interval. Clustered by
+        # patient: sites from one jaw are not independent draws, and a row-wise
+        # bootstrap would understate the spread without saying so.
+        #
+        # NO PASS/FAIL LABEL. Adebayo et al. define no cutoff, so any threshold
+        # printed here would be invented. The sign and the separation between
+        # intervals carry the claim.
+        tab = ci_table(tail, "spearman_vs_intact")
+        print("")
+        print("final stage with 95% CI clustered by patient "
+              f"(lower = decorrelates = more faithful)")
+        for method, r in tab.iterrows():
+            sign = ""
+            if r.ci_hi < 0:
+                sign = "anti-correlates"
+            elif r.ci_lo > 0.5:
+                sign = "retains its map"
+            print(f"  {method:<22} {r.spearman_vs_intact:+7.4f}  "
+                  f"[{r.ci_lo:+7.4f}, {r.ci_hi:+7.4f}]  "
+                  f"n={int(r.patients)} patients  {sign}")
 
         undefined = final[final["n_undefined"] > 0]
         if not undefined.empty:
