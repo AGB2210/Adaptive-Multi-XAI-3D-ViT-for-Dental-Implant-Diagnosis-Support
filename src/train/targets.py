@@ -139,6 +139,47 @@ def spec_from_config(cfg) -> TargetSpec:
     )
 
 
+def to_report_units(out: np.ndarray, spec: TargetSpec, temperature: float = 1.0) -> np.ndarray:
+    """Model outputs converted to the unit each head is actually reported in.
+
+    Binary columns become probabilities -- calibrated, when a temperature is
+    given. Millimetre columns become millimetres, by undoing the standardiser
+    that travelled in the checkpoint. Nothing else is touched.
+
+    This is one function because the same two-line mistake was made
+    independently in three scripts: `sigmoid` applied to the whole output row.
+    On a millimetre head that is not a rounding error. `scripts/evaluate.py`
+    was corrected when the hybrid head landed and carries the comment
+    explaining why; `pool_cv.py`, `run_adaptive.py` and `make_figures.py` were
+    not, so the POOLED millimetre metrics -- the project's headline regression
+    numbers -- were computed on sigmoid(standardised mm), a quantity in (0, 1),
+    scored against a truth in millimetres. The calibration fit was handed
+    millimetres as if they were binary labels, which is what drove the
+    temperature to NaN.
+
+    Call this instead of sigmoiding a row of model outputs. On the hybrid task
+    there is no case where sigmoiding the whole row is right.
+
+    A spec with no declared targets is a checkpoint from before the hybrid head.
+    Those are all-binary by construction, so they are treated that way rather
+    than silently returning raw logits.
+    """
+    if temperature is None or not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError(
+            f"temperature must be a finite positive number, got {temperature!r}. "
+            f"A NaN here means fit_temperature was handed something that is not "
+            f"a binary label -- calibrate on the binary block only."
+        )
+    a = np.asarray(out, dtype=np.float64)
+    n_bin = len(spec.binary) if spec.names else a.shape[-1]
+
+    rep = np.array(a, copy=True)
+    rep[..., :n_bin] = 1.0 / (1.0 + np.exp(-a[..., :n_bin] / temperature))
+    if spec.is_hybrid:
+        rep = spec.to_millimetres(rep.astype(np.float32)).astype(np.float64)
+    return rep
+
+
 class HybridLoss(nn.Module):
     """BCE on the binary block, Huber on the standardised millimetre block.
 

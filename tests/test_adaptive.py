@@ -69,6 +69,49 @@ def test_temperature_scaling_reduces_ece_on_overconfident_scores():
     assert after < before
 
 
+def test_calibrating_on_millimetres_raises_instead_of_returning_nan():
+    """The fault that killed the whole adaptive layer, as a test.
+
+    `run_adaptive.py` passed the FULL hybrid label matrix to both functions:
+    `needs_implant` alongside two columns of millimetres.
+    `binary_cross_entropy_with_logits` does not range-check its target, so a
+    target of 22.5 mm gives a loss that falls monotonically in T with no
+    minimum. LBFGS walked log T to infinity, `fit_temperature` returned NaN,
+    every calibrated probability and uncertainty became NaN, and the gate
+    threshold -- a quantile of NaN -- compared False against every case. The
+    gate never escalated anything and the Pareto sweep collapsed to one point,
+    in silence, after the full compute had been spent.
+
+    ECE showed the same input as 9.097, which is the giveaway: ECE is a
+    weighted mean of |accuracy - confidence| and cannot exceed 1 when both are
+    probabilities.
+    """
+    rng = np.random.default_rng(7)
+    logits = rng.normal(0, 1.5, size=(200, 3))
+    hybrid = np.column_stack([
+        (rng.random(200) < 0.3).astype(float),   # needs_implant
+        rng.normal(14.0, 3.0, 200),              # available_height_mm
+        rng.normal(8.0, 1.5, 200),               # ridge_width_mm
+    ])
+
+    with pytest.raises(ValueError, match=r"binary targets"):
+        fit_temperature(logits, hybrid)
+    with pytest.raises(ValueError, match=r"binary targets"):
+        expected_calibration_error(1 / (1 + np.exp(-logits)), hybrid)
+
+    # Sliced to the binary block, both work and ECE lands back inside [0, 1].
+    ece, _ = expected_calibration_error(1 / (1 + np.exp(-logits[:, :1])), hybrid[:, :1])
+    assert 0.0 <= ece <= 1.0
+    assert np.isfinite(fit_temperature(logits[:, :1], hybrid[:, :1]))
+
+
+def test_ece_rejects_scores_that_are_not_probabilities():
+    """Raw millimetre predictions reaching the ECE, from the other direction."""
+    targets = np.array([[0.0], [1.0], [1.0], [0.0]])
+    with pytest.raises(ValueError, match=r"probs must lie"):
+        expected_calibration_error(np.array([[13.4], [18.1], [21.0], [9.8]]), targets)
+
+
 def test_ece_is_zero_for_perfectly_calibrated_predictions():
     rng = np.random.default_rng(2)
     probs = rng.random((20000, 1))

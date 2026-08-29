@@ -14,6 +14,32 @@ import torch
 import torch.nn.functional as F
 
 
+def _require_binary_targets(targets, who: str) -> None:
+    """Reject anything that is not a 0/1 label before it can quietly poison a fit.
+
+    Both callers below are binary-only by construction, and both were being
+    handed the FULL hybrid label matrix -- `needs_implant` alongside two columns
+    of millimetres. `binary_cross_entropy_with_logits` does not range-check its
+    target, so a target of 22.5 mm produces a loss that falls monotonically in T
+    with no minimum: LBFGS walks log T off to infinity and returns NaN, in
+    silence. ECE showed the same input as 9.097, a value it cannot reach when
+    both arguments are probabilities.
+
+    Slice with `TargetSpec.slice_binary` before calling either function.
+    """
+    y = np.asarray(targets, dtype=np.float64)
+    if y.size == 0:
+        return
+    lo, hi = float(np.nanmin(y)), float(np.nanmax(y))
+    if lo < 0.0 or hi > 1.0:
+        raise ValueError(
+            f"{who} needs binary targets in [0, 1]; got a range of [{lo:.4g}, {hi:.4g}] "
+            f"over {y.shape[-1] if y.ndim > 1 else 1} column(s). Millimetre columns "
+            f"reach this function only when the binary block was not sliced off first "
+            f"-- see TargetSpec.slice_binary."
+        )
+
+
 def fit_temperature(
     logits: np.ndarray,
     targets: np.ndarray,
@@ -25,6 +51,8 @@ def fit_temperature(
     One temperature for all labels: with ~60 validation patients, per-label
     temperatures would be fitted on ~25 positives each and would overfit.
     """
+    _require_binary_targets(targets, "fit_temperature")
+
     z = torch.tensor(np.asarray(logits), dtype=torch.float32)
     y = torch.tensor(np.asarray(targets), dtype=torch.float32)
 
@@ -38,7 +66,16 @@ def fit_temperature(
         return loss
 
     optimizer.step(closure)
-    return float(log_t.exp().item())
+    temperature = float(log_t.exp().item())
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError(
+            f"temperature scaling did not converge: T = {temperature}. "
+            f"Every downstream quantity -- calibrated probabilities, the "
+            f"uncertainty score, the confidence gate -- becomes NaN, and a NaN "
+            f"threshold compares False against everything, so the gate silently "
+            f"never fires. Do not return this."
+        )
+    return temperature
 
 
 def apply_temperature(logits: np.ndarray, temperature: float) -> np.ndarray:
@@ -52,8 +89,16 @@ def expected_calibration_error(
 
     Multi-label, so every (patient, label) pair is one binary prediction.
     """
+    _require_binary_targets(targets, "expected_calibration_error")
     p = np.asarray(probs, dtype=np.float64).ravel()
     y = np.asarray(targets, dtype=np.float64).ravel()
+    if p.size and (np.nanmin(p) < 0.0 or np.nanmax(p) > 1.0):
+        raise ValueError(
+            f"probs must lie in [0, 1]; got [{np.nanmin(p):.4g}, {np.nanmax(p):.4g}]. "
+            f"ECE is a weighted mean of |accuracy - confidence| and is bounded by 1 "
+            f"when both are probabilities -- a larger value is not a bad model, it is "
+            f"the wrong input."
+        )
 
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     ece, bins = 0.0, []

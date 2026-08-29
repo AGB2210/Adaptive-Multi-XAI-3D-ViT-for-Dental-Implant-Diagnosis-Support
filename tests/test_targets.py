@@ -21,6 +21,7 @@ from src.train.targets import (
     regression_metrics,
     spec_from_config,
     threshold_sensitivity,
+    to_report_units,
     validation_skill,
 )
 from src.utils.config import load_config
@@ -267,3 +268,61 @@ class TestConfigWiring:
     def test_the_smoke_config_matches_the_real_one(self):
         real, smoke = load_config("configs/sites.yaml"), load_config("configs/sites_smoke.yaml")
         assert all_target_names(smoke) == all_target_names(real)
+
+
+class TestReportUnits:
+    """`to_report_units` -- the one conversion three scripts each got wrong.
+
+    Each of `pool_cv.py`, `run_adaptive.py` and `make_figures.py` independently
+    wrote `sigmoid(logits)` across the whole output row. On the binary block
+    that is right. On a millimetre head it maps an 18 mm prediction to 0.9999
+    and then scores it against a truth of 18, so the pooled MAE reported
+    approximately the mean of the target and called it the model's error.
+    """
+
+    def spec(self):
+        s = TargetSpec(binary=["needs_implant"], millimetres=MM)
+        return s.fit(sample())
+
+    def test_millimetres_come_back_as_millimetres(self):
+        spec = self.spec()
+        y = sample(n=50, seed=3)
+        standardised = spec.standardise(y)
+        # The model's job is to emit the standardised value; a perfect model
+        # emits exactly this, and reporting must return the original mm.
+        report = to_report_units(standardised, spec)
+        assert np.allclose(report[:, 1:], y[:, 1:], atol=1e-4)
+
+    def test_the_binary_column_becomes_a_probability(self):
+        spec = self.spec()
+        out = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
+        report = to_report_units(out, spec)
+        assert report[0, 0] == pytest.approx(0.5)
+
+    def test_no_millimetre_output_is_squashed_into_the_unit_interval(self):
+        """The actual regression: every mm column landing inside (0, 1)."""
+        spec = self.spec()
+        report = to_report_units(spec.standardise(sample(n=50, seed=4)), spec)
+        assert report[:, 1:].max() > 1.0, (
+            "millimetre outputs are all inside (0, 1) -- they have been "
+            "sigmoided, which is the bug this function exists to prevent"
+        )
+
+    def test_temperature_calibrates_only_the_binary_block(self):
+        spec = self.spec()
+        y = sample(n=30, seed=5)
+        cold = to_report_units(spec.standardise(y), spec, temperature=1.0)
+        warm = to_report_units(spec.standardise(y), spec, temperature=2.0)
+        assert not np.allclose(cold[:, 0], warm[:, 0])
+        assert np.allclose(cold[:, 1:], warm[:, 1:])
+
+    def test_a_non_finite_temperature_is_refused(self):
+        """NaN in, exception out. Silently propagating it is how the gate died."""
+        spec = self.spec()
+        for bad in (float("nan"), 0.0, -1.0):
+            with pytest.raises(ValueError, match="temperature"):
+                to_report_units(spec.standardise(sample(n=4)), spec, temperature=bad)
+
+    def test_a_legacy_checkpoint_is_treated_as_all_binary(self):
+        report = to_report_units(np.zeros((3, 4), dtype=np.float32), TargetSpec())
+        assert np.allclose(report, 0.5)
