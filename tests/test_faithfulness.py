@@ -300,3 +300,39 @@ def test_reinitialize_is_reproducible_for_a_given_seed(model):
         reinitialize(scrambled.blocks[0], torch.Generator().manual_seed(1234))
         outs.append(torch.cat([p.detach().reshape(-1) for p in scrambled.blocks[0].parameters()]))
     assert torch.allclose(outs[0], outs[1])
+
+
+# --------------------------------------------------------------------------
+# what the curve is a curve OF
+# --------------------------------------------------------------------------
+def test_a_millimetre_head_is_not_read_through_a_sigmoid(model, volume):
+    """Deletion/insertion on a millimetre target must not squash the response.
+
+    The explained target on the hybrid task is `available_height_mm`, whose
+    head emits a standardised length, not a logit. Sigmoid is monotone, so it
+    never reverses a single curve -- but an AUC is an integral, and the
+    integral of a NONLINEAR monotone transform can rank two methods the
+    opposite way round from the untransformed integral. Un-standardising to
+    millimetres is affine and provably cannot, which is why the raw output is
+    the right thing to integrate.
+    """
+    torch.manual_seed(3)
+    saliency = torch.rand(volume.shape[2:])
+
+    squashed = deletion_insertion(model, volume, saliency, target_label=0, steps=8)
+    raw = deletion_insertion(model, volume, saliency, target_label=0, steps=8,
+                             target_is_probability=False)
+
+    assert all(0.0 <= v <= 1.0 for v in squashed["deletion_curve"])
+    assert raw["deletion_curve"] != squashed["deletion_curve"]
+    # The raw curve is the model's own output; sigmoid of it is the squashed one.
+    assert np.allclose(1.0 / (1.0 + np.exp(-np.array(raw["deletion_curve"]))),
+                       np.array(squashed["deletion_curve"]), atol=1e-5)
+
+
+def test_the_default_still_reads_a_binary_head_as_a_probability(model, volume):
+    torch.manual_seed(4)
+    saliency = torch.rand(volume.shape[2:])
+    result = deletion_insertion(model, volume, saliency, target_label=1, steps=8)
+    assert 0.0 <= result["deletion_auc"] <= 1.0
+    assert 0.0 <= result["insertion_auc"] <= 1.0

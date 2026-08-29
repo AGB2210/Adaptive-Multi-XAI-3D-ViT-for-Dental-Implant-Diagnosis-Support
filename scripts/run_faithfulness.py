@@ -24,7 +24,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
-from src.train.targets import TargetSpec  # noqa: E402
+from src.train.targets import TargetSpec, to_report_units  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
@@ -92,6 +92,10 @@ def main() -> None:
     baselines, mean_volume = training_baselines(cfg, n=16, device=device, seed=cfg.seed, fold=fold)
     cases = load_case_set(cfg, args.split, dataset, fold=fold)
     ids, y, label_names = cases.ids, cases.y, cases.labels
+    # Where the binary block ends. Deletion/insertion reads a probability on one
+    # side of this line and a standardised length on the other. A checkpoint
+    # with no target_spec predates the hybrid head and is all-binary.
+    n_bin = len(spec.binary) if spec.names else len(label_names)
     n_cases = xai_setting(cfg, "faithfulness_cases", args.n_cases, 20)
     log.info("%s/%s: %d cases available", dataset, args.split, len(ids))
     ids, y = select_cases(ids, y, n_cases, cfg.seed, log)
@@ -137,19 +141,20 @@ def main() -> None:
         mask = bone_mask(volume)
 
         with torch.no_grad():
-            probs = torch.sigmoid(model(volume))[0].cpu().numpy()
+            outputs = to_report_units(model(volume)[0].cpu().numpy(), spec)
 
         # See runner.explanation_target: on the hybrid task this is
         # available_height_mm, whose evidence is crest-to-canal distance and
         # therefore checkable against an annotated structure.
-        target = explanation_target(cfg, spec, probs)
+        target = explanation_target(cfg, spec, outputs)
         maps, results = {}, {}
 
         for name, method in methods.items():
             saliency = method.attribute(volume, target)
             maps[name] = saliency
             result = deletion_insertion(model, volume, saliency, target,
-                                        baseline=baseline, steps=args.steps)
+                                        baseline=baseline, steps=args.steps,
+                                        target_is_probability=target < n_bin)
             results[name] = result
             plausibility = bone_mass_fraction(saliency, mask)
 
@@ -157,8 +162,13 @@ def main() -> None:
                 "dataset": dataset,
                 "patient_id": pid,
                 "target_label": label_names[target] if target < len(label_names) else target,
-                "predicted_prob": float(probs[target]),
-                "true_label": int(y[case_index, target]) if target < y.shape[1] else -1,
+                # In the target's own unit -- a probability for the binary
+                # block, millimetres for the millimetre block. `int()` on the
+                # truth turned 17.4 mm of bone into 17.
+                "predicted_value": float(outputs[target]),
+                "true_value": (float(y[case_index, target])
+                               if target < y.shape[1] else float("nan")),
+                "target_unit": "probability" if target < n_bin else "mm",
                 "method": name,
                 "deletion_auc": result["deletion_auc"],
                 "insertion_auc": result["insertion_auc"],
@@ -225,7 +235,7 @@ def main() -> None:
         volume = cases.load(pid, device)
         with torch.no_grad():
             target = explanation_target(cfg, spec,
-                                        torch.sigmoid(model(volume))[0].cpu().numpy())
+                                        to_report_units(model(volume)[0].cpu().numpy(), spec))
 
         for name in methods:
             # Per method, not per case: the cascade re-initialises the network 12

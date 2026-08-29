@@ -209,3 +209,47 @@ class TestAugmentationMatchesTheCache:
         so absolute position within the box is a shortcut worth breaking."""
         cfg = load_config("configs/sites.yaml")
         assert cfg.augment.translate_voxels > 0
+
+
+class TestASampleIsNotAPositionIntoTheFullArray:
+    """`run_adaptive.py` predicted over every held-out case, then sampled the
+    cases to explain, then read row `i` of the predictions for the `i`-th case
+    of the SAMPLE. Those are different cases.
+
+    Nothing crashed and nothing looked wrong: the volume was loaded by id, so
+    the attribution maps were right, while the uncertainty, the routing
+    decision and the reported confidence in `results_ablations.csv` belonged to
+    whichever case happened to sit at that position in the full fold. Every row
+    was internally plausible and attached to the wrong patient.
+
+    The fix is to look the row up by id. This test states the invariant that
+    makes the lookup necessary.
+    """
+
+    def full_set(self, n=200):
+        ids = [f"P{i:03d}#{t}" for i in range(n // 4) for t in (36, 37, 46, 47)]
+        values = np.arange(len(ids), dtype=float)   # stand-in for a prediction
+        return ids, values
+
+    def test_positional_indexing_reads_the_wrong_case(self):
+        ids, values = self.full_set()
+        y = np.zeros((len(ids), 1), dtype=np.float32)
+        sampled, _ = select_cases(ids, y, 20, seed=1337)
+
+        by_position = [values[i] for i in range(len(sampled))]
+        row_of = {pid: i for i, pid in enumerate(ids)}
+        by_id = [values[row_of[pid]] for pid in sampled]
+
+        assert by_id != by_position, (
+            "the sample happens to be the first 20 in order, so this test "
+            "cannot distinguish the two indexings -- change the seed"
+        )
+
+    def test_lookup_by_id_recovers_the_right_row(self):
+        ids, values = self.full_set()
+        y = np.zeros((len(ids), 1), dtype=np.float32)
+        sampled, _ = select_cases(ids, y, 20, seed=1337)
+
+        row_of = {pid: i for i, pid in enumerate(ids)}
+        for pid in sampled:
+            assert values[row_of[pid]] == float(ids.index(pid))

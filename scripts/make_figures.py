@@ -25,14 +25,13 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.taskdef import primary_dataset  # noqa: E402
-from src.train.targets import TargetSpec  # noqa: E402
+from src.train.targets import TargetSpec, to_report_units  # noqa: E402
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.adaptive import EVAL_METRIC, WEIGHT_METRIC, fuse  # noqa: E402
 from src.xai.base import make_baseline  # noqa: E402
-from src.xai.calibration import apply_temperature  # noqa: E402
 from src.xai.runner import (
     explanation_target,  # noqa: E402
     load_case_set,
@@ -47,11 +46,21 @@ from src.xai.visualize import method_comparison_figure  # noqa: E402
 log = get_logger("figures")
 
 
-def select_cases(ids, y, probs, aux: pd.DataFrame, per_group: int = 2) -> dict[str, list[str]]:
-    """Pick the cases worth showing, grouped by why they are interesting."""
-    confidence = probs.max(axis=1)
-    predicted = (probs >= 0.5).astype(int)
-    correct = (predicted == y).all(axis=1)
+def select_cases(ids, y, probs, aux: pd.DataFrame, per_group: int = 2,
+                 n_bin: int | None = None) -> dict[str, list[str]]:
+    """Pick the cases worth showing, grouped by why they are interesting.
+
+    Grouping is a statement about the BINARY block. Comparing a millimetre
+    column against 0.5 asks whether 18.4 mm is "predicted true", and comparing
+    it for equality against a truth of 18.4 is false for every case -- which is
+    why "correct" came out empty and "incorrect" swept the whole cohort on the
+    hybrid task.
+    """
+    k = probs.shape[1] if n_bin is None else n_bin
+    p_bin, y_bin = probs[:, :k], y[:, :k]
+    confidence = p_bin.max(axis=1)
+    predicted = (p_bin >= 0.5).astype(int)
+    correct = (predicted == y_bin).all(axis=1)
 
     order = np.argsort(-confidence)
     groups: dict[str, list[str]] = {
@@ -111,7 +120,12 @@ def main() -> None:
         log.info("using calibrated temperature T=%.4f", temperature)
     else:
         log.warning("no calibration.json — showing UNcalibrated confidences; run run_adaptive.py first")
-    probs = apply_temperature(logits, temperature)
+    # Calibrated probabilities for the binary block, millimetres for the
+    # millimetre block. `apply_temperature` over the whole row sigmoided the
+    # millimetre heads, so every figure caption reported a bone height as a
+    # confidence.
+    probs = to_report_units(logits, spec, temperature)
+    n_bin = len(spec.binary) if spec.names else probs.shape[1]
 
     # Auxiliary columns are optional context for case selection -- computed by the
     # label builder but never trained on. Whatever extra columns the cohort's CSV
@@ -121,7 +135,7 @@ def main() -> None:
     aux = aux[[c for c in aux.columns
                if c == "patient_id" or (c not in label_names and not c.startswith("ev_"))]]
 
-    groups = select_cases(ids, y, probs, aux, args.per_group)
+    groups = select_cases(ids, y, probs, aux, args.per_group, n_bin=n_bin)
     methods = build_ensemble(model, device, names=tuple(args.methods),
                              mean_volume=mean_volume, baselines=baselines)
 
@@ -137,27 +151,31 @@ def main() -> None:
 
             maps = {n: m.attribute(volume, target) for n, m in methods.items()}
             result = fuse(model, volume, maps, target, weight_metric=WEIGHT_METRIC,
-                          eval_metric=EVAL_METRIC, steps=args.steps, baseline=baseline)
+                          eval_metric=EVAL_METRIC, steps=args.steps, baseline=baseline,
+                          target_is_probability=target < n_bin)
             maps["fused"] = result["fused_map"]
 
             scores = dict(result["per_method_eval"])
             scores["fused"] = result["fused_eval"]
 
-            predicted = [label_names[j] for j in range(len(label_names)) if probs[i, j] >= 0.5]
-            truth = [label_names[j] for j in range(len(label_names)) if y[i, j] == 1]
+            predicted = [label_names[j] for j in range(n_bin) if probs[i, j] >= 0.5]
+            truth = [label_names[j] for j in range(n_bin) if y[i, j] == 1]
             # A case on the site task is a tooth position, not a whole patient.
             unit = "site" if cases.is_sites else "patient"
             title = (
                 f"{group.replace('_', ' ')} — {unit} {pid} — explaining '{label_names[target]}'\n"
                 f"predicted: {', '.join(predicted) or 'none'}  |  true: {', '.join(truth) or 'none'}\n"
-                f"calibrated p={probs[i, target]:.3f}   column headers show {EVAL_METRIC} (lower is better)"
+                f"{'calibrated p' if target < n_bin else 'predicted'}="
+                f"{probs[i, target]:.3f}{'' if target < n_bin else ' mm'}"
+                f"   column headers show {EVAL_METRIC} (lower is better)"
             )
 
             path = figures / f"{group}_{pid}.png"
             method_comparison_figure(volume, maps, path, title=title, scores=scores)
             manifest.append({
                 "group": group, "patient_id": pid, "target_label": label_names[target],
-                "calibrated_prob": float(probs[i, target]),
+                "target_value": float(probs[i, target]),
+                "target_unit": "probability" if target < n_bin else "mm",
                 "predicted": "|".join(predicted), "true": "|".join(truth),
                 "fused_eval": result["fused_eval"], "figure": str(path),
             })

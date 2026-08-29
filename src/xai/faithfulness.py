@@ -107,13 +107,23 @@ def deletion_insertion(
     steps: int = 100,
     batch_size: int = 8,
     baseline_kind: str = "blur",
+    target_is_probability: bool = True,
 ) -> dict:
     """Deletion and insertion curves and their AUCs.
 
     Deletion: replace the highest-saliency voxels with the baseline, step by step.
-        The target probability should FALL fast -> lower AUC is better.
+        The target response should FALL fast -> lower AUC is better.
     Insertion: start from the baseline and restore the highest-saliency voxels.
-        The target probability should RISE fast -> higher AUC is better.
+        The target response should RISE fast -> higher AUC is better.
+
+    `target_is_probability=False` for a millimetre head, where the output is a
+    standardised length and sigmoid is not the right reading of it. Sigmoid is
+    monotone, so it does not reverse a single curve -- but AUC is an integral,
+    and the integral of a NONLINEAR monotone transform can reorder two methods
+    that the untransformed integral ranks the other way. Un-standardising to
+    millimetres would be an affine map, which cannot reorder anything, so the
+    raw output is used directly and every comparison here is exactly the
+    comparison you would get in millimetres.
     """
     model.eval()
     device = volume.device
@@ -138,7 +148,9 @@ def deletion_insertion(
             if not batch:
                 continue
             logits = model(torch.cat(batch, dim=0))
-            probs.append(torch.sigmoid(logits[:, target_label]).cpu().numpy())
+            response = (torch.sigmoid(logits[:, target_label]) if target_is_probability
+                        else logits[:, target_label])
+            probs.append(response.cpu().numpy())
         return np.concatenate(probs)
 
     deletion = run(start_from_baseline=False)
