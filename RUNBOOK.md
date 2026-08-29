@@ -419,9 +419,19 @@ solves for the current one and prints it; use what it prints.
 quote AUROC and AP with confidence intervals. For the millimetre heads quote MAE
 in millimetres beside its floor; an MAE with no floor next to it is unreadable.
 
-Every interval must be **bootstrapped over patients, not rows**: one
-jaw contributes ~14 sites, so resampling rows measures within-patient
-repeatability and reports it as between-patient uncertainty.
+Every interval must be **bootstrapped over patients, not rows**: one jaw
+contributes ~14 sites, so resampling rows measures within-patient repeatability
+and reports it as between-patient uncertainty -- and narrows the interval by
+roughly the square root of the sites-per-patient ratio while saying nothing
+about having done so.
+
+`run_faithfulness.py` and `run_localization.py` now do this for you
+(`runner.clustered_ci`) and print the interval beside every method. **Read what
+they refuse to say as carefully as what they say**: the randomisation table
+names the pairs whose intervals overlap, and localisation declines to name a
+best localiser when the top method is not separated from the rest. There are no
+pass/fail labels anywhere, because Adebayo et al. define no cutoff -- the
+intervals are the claim.
 
 ---
 
@@ -433,9 +443,16 @@ artifacts_sites/runs/cv_fold*/history.csv
 artifacts_sites/cv_pooled_metrics.json
 artifacts_sites/cv_predictions.csv
 artifacts_sites/results_*.csv
+artifacts_sites/results_geometric_baseline_fold*.json
+artifacts_sites/calibration/calibration.json
 artifacts_sites/xai_*.csv
 artifacts_sites/figures/
 ```
+
+Send `results_faithfulness.csv` from **both** faithfulness runs, renamed so the
+settings are visible -- the default and the `--baseline mean --score deviation`
+diagnosis. The settings are in every row, but a filename that says so saves the
+person reading them from having to check.
 
 A few hundred MB in total. **Leave the `.pt` checkpoints and `cache/` behind**
 unless asked — they are many gigabytes, and both are reproducible from the

@@ -26,11 +26,12 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 |---|---|
 | Label builder, arch fitting, site measurement | **Done** — validated against real anatomy |
 | Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
-| Native-resolution cache builder, patch dataset, training wiring | **Done** — builder verified on 14 scans; the full ~52 GB cache builds on the GPU box |
+| Native-resolution cache builder, patch dataset, training wiring | **Done** — the full cache is built: 522 volumes, 26.4 GB, ~19 min on the rented box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
-| Training on the site task | **Not started** — needs a rented GPU |
+| Training on the site task | **Fold 0 done** on a rented RTX 4090. Folds 1–4 not run, so there is no pooled or test-set result |
+| Baselines | CNN written, never trained. Geometric estimator written, never run on real scans — it is the one that can end the architecture argument |
 | Guide sign-off on clinical thresholds | **Pending** |
 
 Both pipelines now produce a `CaseSet` (`src/xai/runner.py`), so the five XAI
@@ -241,13 +242,14 @@ src/data/      preprocessing, caches, augmentation, splits
                implant_sites  bone height / ridge width / nerve clearance, in mm
                dental_arch    where a tooth site is when the tooth is gone
                site_dataset   one sample per site, patches at native resolution
-src/models/    vit3d (from scratch), cnn3d baseline (written, never trained)
+src/models/    vit3d (from scratch), cnn3d baseline (written, never trained),
+               geometric (threshold-and-measure baseline, CPU only)
 src/train/     training loop, metrics with bootstrap CIs
 src/xai/       rollout, IG, GradientSHAP, Grad-CAM, LIME (ablation only),
                faithfulness, localisation, calibration, adaptive fusion
 scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_xai, run_faithfulness, run_localization, run_adaptive,
-               pool_cv, make_figures
+               run_geometric_baseline, pool_cv, make_figures
 ```
 
 ### The superseded detection pipeline
