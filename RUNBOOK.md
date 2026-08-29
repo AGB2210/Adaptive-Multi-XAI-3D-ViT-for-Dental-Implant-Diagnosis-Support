@@ -328,6 +328,44 @@ python scripts/make_figures.py --config configs/sites.yaml --checkpoint artifact
 Add `--deterministic` to any of them if you need bit-reproducible attributions;
 it is slower.
 
+### 4e. Two CPU-only runs that need no GPU and no checkpoint queue
+
+Both can run on a laptop, or on the box while folds train. Neither costs GPU
+time, and between them they decide how much of the XAI section survives review.
+
+**The geometric baseline.** A threshold-and-measure estimator scored through the
+same `regression_metrics` and `threshold_sensitivity` as the model, so the two
+tables compare row for row:
+
+```bash
+python scripts/run_geometric_baseline.py --config configs/sites.yaml --fold 0 --split val
+```
+
+It reads only cached CT intensities, never a segmentation mask -- which matters,
+because the ground-truth labels come from the mask, and an estimator that read
+the mask too would reproduce them and prove nothing. If it lands near the ViT,
+the architecture argument is over; better to know before writing results around
+it.
+
+**The deletion/insertion diagnosis.** The fold-0 run put all four methods within
+0.013 of each other, with deletion roughly equal to insertion, which is what a
+flat response looks like. Two suspects, and both are now flags rather than
+constants:
+
+```bash
+python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --baseline mean --score deviation
+```
+
+`--baseline mean` destroys geometry, where the default blur (sigma 4 voxels =
+1.2 mm) removes texture and leaves a crest-to-canal distance perfectly readable.
+`--score deviation` integrates distance from the full-input prediction instead
+of the raw output, because a millimetre head is not a confidence and has no
+reason to fall when evidence is removed. Both settings are written into every
+row of `results_faithfulness.csv`, so two runs can never be confused.
+
+Run the default settings too, and report both. If the spread stays at 0.013 with
+a mean baseline, the null result is real and belongs in the paper.
+
 ### Anything produced before v3.1.0 has to be re-run
 
 Three scripts converted model outputs with a bare `sigmoid` across the whole

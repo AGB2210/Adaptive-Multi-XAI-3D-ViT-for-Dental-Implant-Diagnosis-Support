@@ -52,7 +52,7 @@ export TOOTHFAIRY3_ROOT=/path/to/ToothFairy3     # never hard-coded
 # 1. sites -> labels  (CPU, ~20 min, reads masks only)
 python scripts/build_implant_labels.py --config configs/sites.yaml
 
-# 2. scans -> native-resolution cache  (~50 GB, rented box)
+# 2. scans -> native-resolution cache  (26 GB over 522 scans, ~19 min, rented box)
 python scripts/build_site_cache.py --config configs/sites.yaml
 
 # 3. sanity gate before any real run (2 min, CPU)

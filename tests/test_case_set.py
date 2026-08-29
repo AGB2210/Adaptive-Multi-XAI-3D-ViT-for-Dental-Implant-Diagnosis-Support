@@ -111,7 +111,7 @@ class TestSiteTask:
             cases.load("NOPE#1", torch.device("cpu"))
 
     def test_volumes_are_memory_mapped(self, cache):
-        """The native-resolution cache is ~50 GB."""
+        """The native-resolution cache is 26 GB over 522 scans."""
         cases = self.build(cache)
         cases.load(f"P1{SITE_SEP}36", torch.device("cpu"))
         assert isinstance(cases._volume("P1"), np.memmap)

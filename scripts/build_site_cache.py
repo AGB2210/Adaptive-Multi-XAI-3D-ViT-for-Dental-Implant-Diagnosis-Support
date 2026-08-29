@@ -20,10 +20,21 @@ WHAT THIS DOES DO, and it has to match src/data/implant_sites.py exactly:
   * applies the same z flip the mask needed, derived from the mask's anatomy
   * clips to the fixed HU window and z-scores on foreground, as before
 
-DISK. A 410x410x273 scan at float16 is ~92 MB, so 532 scans is roughly 49 GB.
-That is why this is a rented-box step: it will not fit on the laptop the earlier
-128^3 cache was built for. It is also why nothing is stored per site -- 28
-patches per scan would triple the space for no additional information.
+DISK. MEASURED over the whole cohort on the rented box: 522 volumes, 26.4 GB,
+about 19 minutes. Scans average ~48 MB at float16, and ten of the 532 are
+refused for ambiguous orientation.
+
+This line previously read "a 410x410x273 scan is ~92 MB, so 532 scans is roughly
+49 GB", extrapolated from one scan. The runbook made the same class of mistake
+from 14 scans that happened to be the first 14 alphabetically and all from one
+cohort, and arrived at 52 GB. Both were about double. One example is not a
+sample -- see `src/xai/runner.select_cases` for the same lesson learned in the
+XAI path.
+
+It is still a rented-box step: 26 GB will not fit beside the 28 GB dataset on
+the laptop the earlier 128^3 cache was built for. It is also still why nothing
+is stored per site -- 28 patches per scan would triple the space for no
+additional information.
 """
 
 from __future__ import annotations
