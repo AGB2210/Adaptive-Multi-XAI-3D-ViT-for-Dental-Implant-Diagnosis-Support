@@ -291,10 +291,11 @@ script now logs `N/M cases done` with a per-case time, so you can extrapolate
 after the first case rather than guessing.
 
 **One extra thing to run while you are here.** The model-randomisation table in
-`REPORT.md` §C9 was measured before a fault in the cascade's rebuild path was
-fixed, and two of its four rows (`integrated_gradients`, `gradient_shap`) are
-marked provisional because of it. The fix is already in the code, so a re-run
-settles them:
+`REPORT.md` §C9 has been measured on the real model with the rebuild fix in
+place, so nothing in it is provisional any more. What it still lacks is
+intervals: `--only-randomization` re-runs the cascade alone and the report now
+prints a patient-clustered interval per method, which is what turns the ordering
+from nominal into supported.
 
 ```bash
 python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --only-randomization
