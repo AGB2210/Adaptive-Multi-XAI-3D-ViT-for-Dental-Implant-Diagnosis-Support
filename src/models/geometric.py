@@ -89,37 +89,115 @@ def otsu(values: np.ndarray, bins: int = 128) -> float:
     return float(centres[int(np.median(plateau))])
 
 
-# Below this, the histogram is not two classes and thresholding it invents a
+# Below this, a histogram is not two classes and thresholding it invents a
 # boundary. MEASURED, not chosen: the separation ratio -- the gap between the
 # two class means over the 0.5-99.5 percentile range -- is 0.92 on the bone
 # phantom, 0.82 on a clean two-peak histogram, and 0.31 on pure Gaussian noise.
-# 0.5 sits between them with room on both sides.
+# 0.5 sits between them with room on both sides. It gates both passes: the
+# second Otsu is only trusted when the sub-threshold voxels really are two
+# tissues rather than one tissue and its noise.
 MIN_SEPARATION = 0.5
 
 
-def bone_threshold(patch: np.ndarray) -> float:
-    """Otsu, but NaN when the patch has no two classes to separate.
+# How much of the bone column's z-extent must read as solid before a threshold
+# is believed. MEASURED across phantoms, with the disc that `measure_patch` uses:
+#
+#                        first cut          second cut
+#   three-class ridge    0.03  <- shell     0.65  <- column      take the second
+#   two-class ridge      0.65  <- column    0.89  <- swallowed   keep the first
+#   pure noise           0.61               1.00                 rejected earlier
+#   soft tissue only     0.52               1.00                 rejected earlier
+#
+# The last two never reach this decision: their first-pass separation is 0.31,
+# below MIN_SEPARATION. So the only judgement left is shell versus column, and
+# 0.03 against 0.65 is not a close call.
+def _split(v: np.ndarray) -> tuple[float, float]:
+    """Otsu threshold over `v`, and how separated the two classes it makes are.
 
-    Otsu always returns a number. On a patch that is entirely soft tissue, or
-    entirely outside the jaw, that number splits noise down the middle and half
-    the voxels become "bone" -- and the estimator then reports a confident
-    height for a site it cannot see. Returning NaN here is what makes the
-    baseline able to say it could not measure something.
+    Separation is the gap between the two class means over the 0.5-99.5
+    percentile range, which is what tells a genuinely two-class histogram from
+    noise cut down the middle.
+    """
+    v = np.asarray(v, dtype=np.float64).ravel()
+    v = v[np.isfinite(v)]
+    if v.size < 64:
+        return float("nan"), 0.0
+    cut = otsu(v)
+    if not np.isfinite(cut):
+        return float("nan"), 0.0
+    dark, bright = v[v <= cut], v[v > cut]
+    lo, hi = np.percentile(v, [0.5, 99.5])
+    spread = float(hi - lo)
+    if dark.size == 0 or bright.size == 0 or spread < 1e-9:
+        return float("nan"), 0.0
+    return cut, float(bright.mean() - dark.mean()) / spread
+
+
+SHELL_SOLID_MAX = 0.20      # below this, the first cut found a shell, not a column
+COLUMN_SOLID_MAX = 0.85     # above this, a cut has swallowed the soft tissue too
+
+
+def _solid_fraction(patch: np.ndarray, cut: float, spacing) -> float:
+    """Fraction of slices whose central column is at least half bone."""
+    if not np.isfinite(cut):
+        return 0.0
+    disc = _column(patch, COLUMN_RADIUS_MM, spacing)
+    n = max(int(disc.sum()), 1)
+    profile = ((patch > cut) & disc[:, :, None]).sum(axis=(0, 1)) / n
+    return float((profile >= 0.5).mean())
+
+
+def bone_threshold(patch: np.ndarray, spacing=(0.3, 0.3, 0.3)) -> float:
+    """Where bone starts. NaN when the patch has no two classes to separate.
+
+    ONE OTSU CANNOT SEPARATE THREE TISSUE CLASSES, AND THIS PATCH HAS THREE. A
+    site patch is mostly soft tissue, with a thin bright cortical shell around a
+    ridge whose interior is trabecular bone barely above soft tissue. Otsu
+    splits off the brightest class, which is cortex -- measured at 1.52 in
+    z-scored units on the three-class phantom, leaving only 4.8% of voxels on
+    the bone side. A run through the centre then reads cortex, marrow, cortex,
+    and what gets measured is ONE CORTICAL PLATE: 0.9 mm where the ridge is
+    9.0 mm, and 0.6 mm where the height is 9.0 mm.
+
+    This is the same fault v2.0.0 fixed in the mask pipeline from the other
+    side, where a bone-only slab had a hole at every occupied site and a 6.00 mm
+    ridge measured 1.80 mm (`implant_sites.ridge_width`). Here it arrives
+    through intensity instead of labels, and it was found in review rather than
+    by this project's own tests.
+
+    The remedy is to run Otsu AGAIN over everything below the first cut. That
+    second histogram is soft tissue against trabecular bone, and its threshold
+    is the one that puts the whole ridge on the bone side.
+
+    THE SECOND CUT IS NOT ALWAYS RIGHT, so it is not chosen by the histogram. On
+    a patch where the first cut already found a solid column, the second one
+    sits inside the background and swallows it. The decision is made on the
+    outcome instead: take the second threshold only when the first found a SHELL
+    -- almost no solid column at all -- and only when the second finds a column
+    rather than the whole patch. Both bounds are measured; see the table above.
+
+    Filling the cortical ring per axial slice would also recover the interior,
+    and it is what a mask-based pipeline would do. It is rejected here because
+    it assumes topology this input does not guarantee: a 96^3 patch at 0.3 mm is
+    28.8 mm across, a short segment of the arch rather than a closed ring, so
+    whether the shell encloses anything in-plane depends on where round the jaw
+    the site sits. A threshold assumes nothing about shape.
     """
     v = np.asarray(patch, dtype=np.float64).ravel()
     v = v[np.isfinite(v)]
-    cut = otsu(v)
-    if not np.isfinite(cut) or v.size == 0:
+    cut, separation = _split(v)
+    if not np.isfinite(cut) or separation < MIN_SEPARATION:
         return float("nan")
-    lo, hi = np.percentile(v, [0.5, 99.5])
-    spread = float(hi - lo)
-    if spread < 1e-9:
-        return float("nan")
-    dark, bright = v[v <= cut], v[v > cut]
-    if dark.size == 0 or bright.size == 0:
-        return float("nan")
-    separation = float(bright.mean() - dark.mean()) / spread
-    return cut if separation >= MIN_SEPARATION else float("nan")
+
+    if _solid_fraction(patch, cut, spacing) > SHELL_SOLID_MAX:
+        return float(cut)                    # already a column; leave it alone
+
+    inner_cut, _ = _split(v[v <= cut])
+    if not np.isfinite(inner_cut):
+        return float(cut)
+    if _solid_fraction(patch, inner_cut, spacing) > COLUMN_SOLID_MAX:
+        return float(cut)                    # would swallow the soft tissue
+    return float(inner_cut)
 
 
 def _column(patch: np.ndarray, radius_mm: float, spacing) -> np.ndarray:
@@ -158,7 +236,7 @@ def measure_patch(patch: np.ndarray, jaw: str, spacing) -> dict:
         return out
 
     disc = _column(patch, COLUMN_RADIUS_MM, spacing)
-    cut = bone_threshold(patch)
+    cut = bone_threshold(patch, spacing)
     if not np.isfinite(cut):
         return out
 
@@ -192,6 +270,8 @@ def measure_patch(patch: np.ndarray, jaw: str, spacing) -> dict:
     # sinus floor in the maxilla. Both are air- or fluid-filled and read dark
     # against bone, which is the whole reason this is measurable from intensity.
     interior = np.arange(lo, crest)[::-1] if upward else np.arange(crest + 1, hi + 1)
+    # With the threshold now sitting below trabecular bone, the canal is once
+    # again what it physically is: a hole in an otherwise solid column.
     dark = ~solid
     min_run = max(1, int(round(MIN_CANAL_RUN_MM / float(spacing[2]))))
 

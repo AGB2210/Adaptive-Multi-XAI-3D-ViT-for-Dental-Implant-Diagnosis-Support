@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.models.geometric import measure_patch, otsu
+from src.models.geometric import bone_threshold, measure_patch, otsu
 
 SPACING = (0.3, 0.3, 0.3)
 
@@ -35,6 +35,104 @@ def phantom(n=96, crest=70, canal_top=40, canal_thick=8, width_vox=30, seed=0):
     # crest is the last bone slice (crest-1); the canal roof is canal_top-1
     height_mm = (crest - 1 - (canal_top - 1)) * SPACING[2]
     return patch.astype(np.float32), height_mm, width_vox * SPACING[0]
+
+
+def cortical_phantom(n=96, crest=70, canal_top=40, canal_thick=8, width_vox=30,
+                     plate_vox=3, seed=1):
+    """The phantom that matters: THREE tissue classes, not two.
+
+    A real patch is mostly soft tissue, with a thin bright cortical shell around
+    a ridge whose interior is trabecular bone barely above soft tissue, and a
+    canal darker than either. One threshold cannot separate three classes, and
+    which two it merges decides whether the estimator measures a ridge or a
+    single cortical plate.
+    """
+    rng = np.random.default_rng(seed)
+    patch = rng.normal(0.0, 0.15, size=(n, n, n)).astype(np.float32)   # soft tissue
+    cx = n // 2
+    half = width_vox // 2
+    patch[cx - half:cx + half, :, :crest] = 0.45                       # trabecular
+    patch[cx - half:cx - half + plate_vox, :, :crest] = 2.5            # buccal cortex
+    patch[cx + half - plate_vox:cx + half, :, :crest] = 2.5            # lingual cortex
+    patch[cx - half:cx + half, :, crest - 3:crest] = 2.5               # crestal cortex
+    if canal_thick:
+        patch[cx - half:cx + half, :, canal_top - canal_thick:canal_top] = -0.2
+    patch += rng.normal(0.0, 0.03, size=patch.shape).astype(np.float32)
+    height_mm = (crest - 1 - (canal_top - 1)) * SPACING[2]
+    return patch.astype(np.float32), height_mm, width_vox * SPACING[0]
+
+
+class TestCorticalRidges:
+    """The failure that a single threshold produces on real bone.
+
+    Otsu over a soft-tissue-dominated patch lands high -- measured at 1.52 in
+    z-scored units on the phantom below -- and cuts between dense CORTICAL bone
+    and everything else, so the trabecular bone filling the ridge falls on the
+    background side. A run through the centre then reads cortex, marrow, cortex,
+    and what gets measured is ONE CORTICAL PLATE: 0.9 mm where the ridge is
+    9.0 mm.
+
+    It is the same fault v2.0.0 fixed in the mask pipeline from the other side,
+    where a bone-only slab had a hole at every occupied site and a 6.00 mm ridge
+    measured 1.80 mm. Here it arrives through intensity rather than labels, and
+    it was found by review rather than by this suite -- which is why the phantom
+    now lives here.
+    """
+
+    def test_a_single_otsu_lands_above_trabecular_bone(self):
+        """Both halves of the fix, pinned.
+
+        The first pass must still land high -- that is the fault, and if it
+        stops happening the regressions below stop testing anything. The
+        corrected threshold must then land between soft tissue and trabecular
+        bone instead.
+        """
+        patch, _, _ = cortical_phantom()
+        naive = otsu(patch)
+        assert naive > 1.0, (
+            f"a single Otsu returned {naive:.2f}; the three-class phantom was "
+            f"built so it splits off cortex alone"
+        )
+        assert float((patch > naive).mean()) < 0.10, "cortex is a small minority class"
+
+        corrected = bone_threshold(patch, SPACING)
+        assert 0.0 < corrected < 0.45, (
+            f"the corrected threshold is {corrected:.2f}; it should sit between "
+            f"soft tissue at 0.0 and trabecular bone at 0.45"
+        )
+        assert float((patch > corrected).mean()) > 0.05
+
+    def test_the_ridge_is_measured_whole_not_one_cortical_plate(self):
+        patch, _, width_mm = cortical_phantom()
+        got = measure_patch(patch, "lower", SPACING)
+        assert abs(got["ridge_width_mm"] - width_mm) <= 3 * SPACING[0], (
+            f"measured {got['ridge_width_mm']:.2f} mm against a built-in "
+            f"{width_mm:.2f} mm. A value near one plate thickness means the "
+            f"cavity fill is not reaching the width probe"
+        )
+
+    def test_the_height_survives_a_cortical_ridge_too(self):
+        patch, height_mm, _ = cortical_phantom()
+        got = measure_patch(patch, "lower", SPACING)
+        assert got["limiter"] == "nerve"
+        assert abs(got["available_height_mm"] - height_mm) <= 3 * SPACING[2], (
+            f"measured {got['available_height_mm']:.2f} mm against a built-in "
+            f"{height_mm:.2f} mm"
+        )
+
+    def test_the_canal_is_not_filled_in_along_with_the_marrow(self):
+        """The fill has to spare the canal, which is the whole difficulty.
+
+        A canal is a cavity, and so is marrow; filling in 3D would swallow both.
+        With no canal present the estimator must fall back to bone extent, and
+        with one present it must find it -- so the two cases must differ.
+        """
+        with_canal, _, _ = cortical_phantom()
+        without, _, _ = cortical_phantom(canal_thick=0)
+        a = measure_patch(with_canal, "lower", SPACING)
+        b = measure_patch(without, "lower", SPACING)
+        assert a["limiter"] == "nerve" and b["limiter"] == "bone_extent"
+        assert a["available_height_mm"] < b["available_height_mm"]
 
 
 class TestOtsu:
