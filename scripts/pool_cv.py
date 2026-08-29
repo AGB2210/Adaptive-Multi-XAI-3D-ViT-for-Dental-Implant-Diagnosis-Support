@@ -42,8 +42,10 @@ from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file  # noqa: E402
 from src.train.metrics import evaluate, format_metrics  # noqa: E402
 from src.train.targets import (  # noqa: E402
+    TargetSpec,
     format_regression,
     regression_metrics,
+    to_report_units,
 )
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
@@ -129,7 +131,23 @@ def main() -> None:
         model.to(device).eval()
 
         logits = predict_case_logits(model, cases, device, batch_size=cfg.train.batch_size)
-        probs = 1.0 / (1.0 + np.exp(-logits))
+        # Sigmoid the BINARY block only, and un-standardise the millimetre block
+        # with this round's own scaler. Sigmoiding the whole row -- which this
+        # script did until the millimetre metrics below were checked against a
+        # hand computation -- turns an 18 mm prediction into 0.9999 and then
+        # scores it against a truth of 18, so the pooled MAE reported roughly
+        # the mean of the target instead of the model's error. Each fold carries
+        # its own scaler, so the conversion has to happen here, inside the loop,
+        # before anything is pooled.
+        spec = TargetSpec.from_state(ckpt.get("target_spec"))
+        if n_bin < len(labels) and not spec.is_hybrid:
+            raise SystemExit(
+                f"round {k}: the config declares millimetre targets "
+                f"{labels[n_bin:]} but the checkpoint carries no target_spec, so "
+                f"there is no scaler to undo. Retrain, or pool a classification "
+                f"config -- do not report standardised units as millimetres."
+            )
+        probs = to_report_units(logits, spec)
 
         # Thresholds come from that round's own validation fold, never from the
         # pooled set -- picking one threshold on all 532 would tune it on the
@@ -172,20 +190,30 @@ def main() -> None:
     pred_csv = adir / "cv_predictions.csv"
     with pred_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
+        # Column names carry the unit: `prob_` for the binary block, `mm_` for
+        # the millimetre block. A header that calls 18.4 mm a probability is how
+        # a reader ends up quoting it as one.
+        def _pred_col(i: int, name: str) -> str:
+            return f"prob_{name}" if i < n_bin else f"mm_{name}"
+
         w.writerow(["case_id", "patient_id", "fold"]
                    + [f"true_{n}" for n in labels]
-                   + [f"prob_{n}" for n in labels]
-                   + [f"pred_{n}" for n in labels])
+                   + [_pred_col(i, n) for i, n in enumerate(labels)]
+                   + [f"pred_{n}" for n in labels[:n_bin]])
         # Folds hold PATIENT ids. On the site task a case id is
         # "<patient>#<tooth>", so the fold is looked up by the patient it
         # belongs to -- 28 sites from one scan always move together.
         fold_of = {p: k for k, f in enumerate(folds) for p in f}
         for i, case_id in enumerate(pooled_ids):
             pid = str(case_id).split(SITE_SEP)[0]
+            # `.astype(int)` truncated the truth: a site with 17.4 mm of bone
+            # was written to the predictions CSV as 17, and any later analysis
+            # reading this file inherited a silently rounded ground truth.
             w.writerow([case_id, pid, fold_of[pid]]
-                       + y_true[i].astype(int).tolist()
+                       + [str(int(v)) if j < n_bin else f"{v:.6f}"
+                          for j, v in enumerate(y_true[i])]
                        + [f"{v:.6f}" for v in y_prob[i]]
-                       + y_pred[i].tolist())
+                       + y_pred[i][:n_bin].tolist())
     log.info("wrote %s", pred_csv)
 
     binary_names = labels[:n_bin]
