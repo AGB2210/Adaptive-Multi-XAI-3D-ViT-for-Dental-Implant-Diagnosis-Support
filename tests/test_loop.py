@@ -21,7 +21,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.train import loop
 from src.train.loop import Trainer, cosine_warmup, predict
 
-
 # --- the LR schedule ----------------------------------------------------------
 
 def test_warmup_rises_from_near_zero_to_one():
