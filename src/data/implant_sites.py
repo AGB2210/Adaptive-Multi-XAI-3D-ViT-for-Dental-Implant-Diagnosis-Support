@@ -221,7 +221,8 @@ class SiteMeasurement:
     crest_mm: float                # superior-inferior position of the ridge crest
     available_height_mm: float     # crest to nerve (lower) or crest to sinus (upper)
     ridge_width_mm: float          # bucco-lingual bone thickness below the crest
-    limiting_structure: str        # "nerve" | "sinus" | "bone_extent" | "no_bone"
+    limiting_structure: str        # "nerve" | "sinus" | "bone_extent"
+                                   #   | "no_bone" | "impossible_geometry"
     n_bone_voxels: int             # support for the measurement; 0 means no bone
     width_fallback: bool = False   # width probe missed and took the nearest run
 
@@ -444,7 +445,16 @@ def ridge_width(mask, centre, crest_z: int, jaw: str, spacing,
             run, missed = run_through(line, index)
             fell_back = fell_back or missed
             widths.append(float(run * mm))
-    return (min(widths) if widths else 0.0), fell_back
+
+    # The slab exists -- that was checked above -- but neither probe line
+    # crossed it, which happens when the bone is offset from the centre in BOTH
+    # x and y. That is a measurement that could not be made, so NaN, exactly as
+    # the empty-slab branch above returns. It used to return 0.0: a knife-edge
+    # ridge, failing the width rule as though it had been measured. Same fault
+    # as that branch, one level further down, and it was fixed there first.
+    if not widths:
+        return float("nan"), fell_back
+    return min(widths), fell_back
 
 
 def run_through(line: np.ndarray, index: int) -> int:

@@ -196,6 +196,24 @@ class TestMeasureSite:
         assert np.isnan(height_with_canal_at(70)), (
             "a canal roof above the crest is impossible, not zero")
 
+    def test_a_width_that_could_not_be_probed_is_nan_not_zero(self):
+        """Both zero-width paths, and they were fixed one at a time.
+
+        `ridge_width` returns NaN when the probe plane holds no bone at all --
+        and used to return 0.0 when the plane held bone that neither probe line
+        crossed, which happens when the anatomy is offset from the centre in
+        both x and y. A 0.0 there reads as a knife-edge ridge and fails the
+        width rule as though it had been measured.
+        """
+        from src.data.implant_sites import ridge_width
+
+        # Bone in the plane, but offset from the centre in both axes.
+        m = blank()
+        m[5:10, 5:10, 10:30] = LOWER_JAW
+        width, _ = ridge_width(m, (35, 35, 0), crest_z=25, jaw="lower", spacing=SPACING)
+        assert np.isnan(width) or width > 0.0, (
+            f"got {width}; a width that could not be probed must not be 0.0 mm")
+
     def test_rejects_an_unknown_jaw(self):
         with pytest.raises(ValueError, match="jaw"):
             measure_site(blank(), (20, 20, 0), "middle", SPACING)
