@@ -1,6 +1,7 @@
 """Faithfulness metrics that need no annotation.
 
-    python scripts/run_faithfulness.py --config configs/sites.yaml \n        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
+    python scripts/run_faithfulness.py --config configs/sites.yaml \
+        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
 
 Do not pass --n-cases to shrink the run: the sample sizes come from the `xai:`
 block and are the sizes that make a claim.

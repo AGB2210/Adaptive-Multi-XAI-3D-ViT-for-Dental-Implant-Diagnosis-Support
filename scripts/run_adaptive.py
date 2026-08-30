@@ -1,6 +1,7 @@
 """Calibration, confidence gate, and agreement-weighted fusion.
 
-    python scripts/run_adaptive.py --config configs/sites.yaml \n        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
+    python scripts/run_adaptive.py --config configs/sites.yaml \
+        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
 
 Tests the three claims the project rests on, and reports them whichever way they
 come out:

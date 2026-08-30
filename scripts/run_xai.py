@@ -1,6 +1,7 @@
 """The XAI methods — synthetic sanity, IG completeness, runtime.
 
-    python scripts/run_xai.py --config configs/sites.yaml \n        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
+    python scripts/run_xai.py --config configs/sites.yaml \
+        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
 
 Emits artifacts/xai_runtime.csv and artifacts/xai_sanity.csv. Stop and read both
 before continuing to 2B: a method that fails the synthetic-signal test is broken,
