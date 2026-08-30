@@ -190,7 +190,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/sites.yaml")
     ap.add_argument("--dataset", default=None, help="defaults to data.primary")
-    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--limit", type=int, default=0,
+                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against 48 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
     ap.add_argument("--min-height-mandible-mm", dest="min_height_mandible_mm",
                     type=float, default=None, help="overrides sites.* in the config")
     ap.add_argument("--min-height-maxilla-mm", dest="min_height_maxilla_mm",

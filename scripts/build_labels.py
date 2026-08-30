@@ -70,7 +70,8 @@ def main() -> None:
     ap.add_argument("--dataset", default=None, help="defaults to data.primary")
     ap.add_argument("--min-voxels", dest="min_voxels", type=int, default=None,
                     help="overrides task.min_voxels")
-    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--limit", type=int, default=0,
+                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against 48 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
