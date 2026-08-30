@@ -279,6 +279,11 @@ def main() -> None:
         "pooled": pooled,
         "per_fold": per_fold,
         "n_cases": len(pooled_ids),
+        # The count every interval in `pooled` actually rests on. A reader
+        # checking whether a CI is plausible needs the number of INDEPENDENT
+        # units, and on the site task that is patients, not the ~14x larger
+        # case count sitting beside it.
+        "n_patients": len(set(patients_of(pooled_ids))),
         "labels": labels,
         "n_folds": len(folds),
     }, indent=2), encoding="utf-8")

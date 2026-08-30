@@ -9,10 +9,9 @@ having done so.
 
 from __future__ import annotations
 
-import unittest
-
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.xai.runner import ci_table, clustered_ci, patients_of
 
@@ -116,7 +115,7 @@ class TestCiTable:
         assert (table["value"] <= table["ci_hi"]).all()
 
 
-class TestACaseIdIsNotAPatientId(unittest.TestCase):
+class TestACaseIdIsNotAPatientId:
     """The bootstrap was defeated once by a column NAME, not by its maths.
 
     `run_faithfulness.py` wrote `patient#tooth` into a column called
@@ -127,7 +126,7 @@ class TestACaseIdIsNotAPatientId(unittest.TestCase):
     cases came from 14 patients.
     """
 
-    def _frame(self, ids):
+    def frame(self, ids):
         return pd.DataFrame({
             "patient_id": ids,
             "method": ["gradcam"] * len(ids),
@@ -135,21 +134,18 @@ class TestACaseIdIsNotAPatientId(unittest.TestCase):
         })
 
     def test_case_ids_are_refused(self):
-        frame = self._frame([f"P{i // 3:03d}#{30 + i % 3}" for i in range(12)])
-        with self.assertRaises(ValueError) as caught:
+        frame = self.frame([f"P{i // 3:03d}#{30 + i % 3}" for i in range(12)])
+        with pytest.raises(ValueError, match="case ids") as caught:
             clustered_ci(frame, "value")
-        message = str(caught.exception)
-        self.assertIn("case ids", message)
-        self.assertIn("patients_of", message)
+        assert "patients_of" in str(caught.value)
 
     def test_patients_of_makes_the_same_frame_acceptable(self):
         ids = [f"P{i // 3:03d}#{30 + i % 3}" for i in range(12)]
-        frame = self._frame(ids)
+        frame = self.frame(ids)
         frame["patient_id"] = patients_of(ids)
         point, lo, hi = clustered_ci(frame, "value")
-        self.assertTrue(np.isfinite([point, lo, hi]).all())
-        self.assertLessEqual(lo, point)
-        self.assertLessEqual(point, hi)
+        assert np.isfinite([point, lo, hi]).all()
+        assert lo <= point <= hi
 
     def test_row_resampling_would_have_been_narrower(self):
         """The size of what was understated, measured rather than asserted."""
@@ -168,5 +164,4 @@ class TestACaseIdIsNotAPatientId(unittest.TestCase):
 
         _, lo_p, hi_p = clustered_ci(by_patient, "value")
         _, lo_r, hi_r = clustered_ci(by_row, "value")
-        self.assertGreater(hi_p - lo_p, hi_r - lo_r,
-                           "resampling rows must understate the interval")
+        assert hi_p - lo_p > hi_r - lo_r, "resampling rows must understate the interval"
