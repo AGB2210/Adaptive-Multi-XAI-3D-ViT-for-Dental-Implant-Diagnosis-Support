@@ -342,9 +342,28 @@ def main() -> None:
         else:
             loaders, matrices = make_loaders(cfg, splits, patient_ids, y, cache_dir, args)
         y_train = matrices["train"][1]
+        # Report each block in its own unit. `matrices[...][1]` holds the binary
+        # columns AND the millimetre ones, so a single "prevalence=" line printed
+        # 14.4 under a heading that means "fraction positive". Same class of
+        # mislabel as the patient_id column that defeated the bootstrap, in the
+        # line an operator reads first to sanity-check a split.
+        # Computed here rather than reusing the later binary_names/mm_names,
+        # which are not bound until after this block.
+        split_binary = label_names_for(cfg)
+        split_mm = regression_names_for(cfg)
+        n_bin_cols = len(split_binary)
         for name in ("train", "val", "test"):
-            log.info("%-5s n=%3d prevalence=%s", name, len(matrices[name][0]),
-                     np.round(matrices[name][1].mean(axis=0), 3).tolist())
+            block = matrices[name][1]
+            parts = []
+            if n_bin_cols:
+                prev = np.round(np.nanmean(block[:, :n_bin_cols], axis=0), 3).tolist()
+                parts.append(f"prevalence={prev}")
+            if split_mm:
+                # nanmean: an unmeasurable site is NaN, and a plain mean would
+                # make one of them poison the whole column's summary.
+                means = np.round(np.nanmean(block[:, n_bin_cols:], axis=0), 2).tolist()
+                parts.append(f"mean_mm={means}")
+            log.info("%-5s n=%3d %s", name, len(matrices[name][0]), "  ".join(parts))
 
     # ---- prevalence baseline (free, always reported) --------------------
     # The no-information floor: the loss of a model that ignores the image.
