@@ -70,7 +70,15 @@ class TestEnrichment:
         assert enrichment(s, small) > enrichment(s, big)
 
     def test_negative_saliency_is_clipped_not_summed(self, mask):
-        """Attribution can be signed; mass is about magnitude of support."""
+        """The function's own contract, exercised on a RAW signed map.
+
+        Note this clip never fires in the pipeline: every method's output goes
+        through `SaliencyMethod.attribute`, which is non-negative by the time it
+        arrives -- Grad-CAM by ReLU, IG and GradientSHAP by `.abs()`, rollout by
+        construction. Those are three different meanings of "mass", and the
+        difference belongs beside any claim that one method localises better
+        than another. See `mass_inside`'s docstring.
+        """
         s = np.full(SHAPE, -1.0, dtype=np.float32)
         s[mask] = 1.0
         assert mass_inside(s, mask) == pytest.approx(1.0)
