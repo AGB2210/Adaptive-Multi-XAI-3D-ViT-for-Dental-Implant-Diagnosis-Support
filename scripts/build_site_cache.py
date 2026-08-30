@@ -123,12 +123,19 @@ def normalise(volume: np.ndarray, clip_window, air_threshold: float):
     volume = np.clip(volume, lo, hi)
 
     foreground = volume[volume > air_threshold]
-    if foreground.size < 100:
+    # Falling back to the whole volume changes what the z-score MEANS for that
+    # scan: it is no longer normalised against tissue but against tissue plus
+    # air, so its intensities are not comparable with the rest of the cohort.
+    # `src/data/preprocess.py` does the same fallback and writes
+    # "z-scored on all voxels (foreground empty)" into its manifest. This path
+    # did it silently, and this is the live one.
+    fell_back = foreground.size < 100
+    if fell_back:
         foreground = volume
     mean, std = float(foreground.mean()), float(foreground.std())
     if std < 1e-6:
         raise ValueError("zero-variance volume")
-    return ((volume - mean) / std).astype(np.float16), mean, std
+    return ((volume - mean) / std).astype(np.float16), mean, std, fell_back
 
 
 def main() -> None:
@@ -201,13 +208,18 @@ def main() -> None:
             if sign == -1:
                 volume = volume[:, :, ::-1]
 
-            out, mean, std = normalise(volume, clip_window, air)
+            out, mean, std, fell_back = normalise(volume, clip_window, air)
+            if fell_back:
+                log.warning("%s: no foreground above the air threshold -- "
+                            "z-scored on all voxels, so this scan's intensities "
+                            "are not comparable with the rest of the cohort", pid)
             np.save(target, np.ascontiguousarray(out))
             rows.append({
                 "patient_id": pid, "status": "ok",
                 "shape": "x".join(map(str, out.shape)),
                 "spacing_mm": ",".join(f"{v:.4f}" for v in spacing),
                 "orientation_sign": sign, "fg_mean": mean, "fg_std": std,
+                "zscored_on_all_voxels": bool(fell_back),
                 "mb": round(out.nbytes / 1e6, 1),
             })
         except Exception as exc:  # noqa: BLE001 - one bad scan must not lose the run

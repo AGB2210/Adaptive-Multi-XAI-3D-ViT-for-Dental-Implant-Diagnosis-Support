@@ -21,9 +21,10 @@ fit_mode controls step 4, and the choice matters for cross-hospital transfer:
   "resize" -- stretch the crop straight onto out_shape, as the original spec
       literally describes. Keeps all anatomy, but effective spacing then varies
       per patient AND per dataset. Measured on the earlier cohort pair:
-      1.25 mm/voxel at a 160 mm FOV versus 0.63 mm/voxel at 80 mm, so the
-      arrives ~2x larger than anything the model saw in training. It also
-      distorts MMDental anisotropically (1.25 in-plane vs 0.78 axial).
+      1.25 mm/voxel at a 160 mm FOV versus 0.63 mm/voxel at 80 mm, so the same
+      anatomy arrives ~2x larger in one cohort than in the other and a model
+      trained on one sees an object it has no scale reference for. It also
+      distorts anisotropically (1.25 in-plane against 0.78 axial).
 
 Either way `effective_spacing_mm` is recorded per patient in the manifest.
 """
