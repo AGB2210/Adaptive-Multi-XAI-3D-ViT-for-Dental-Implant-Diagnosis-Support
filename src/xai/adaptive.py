@@ -19,6 +19,14 @@ circular. This module therefore separates the two by construction:
     WEIGHT_METRIC = insertion_auc      (higher is better)
     EVAL_METRIC   = deletion_auc       (lower is better)
 
+Those two directions hold for a PROBABILITY target, and `LOWER_IS_BETTER` below
+encodes them. On a millimetre head under `score="response"` neither is founded:
+deleting voxels moves a length toward whatever the baseline implies, which may
+be larger or smaller. The weighting still works -- it only needs a consistent
+ordering to build weights from -- but the reported score must not be read as
+"better" in absolute terms, and the scripts say so rather than printing a
+direction they cannot support.
+
 `fuse()` refuses to run if asked to weight and evaluate on the same metric.
 """
 

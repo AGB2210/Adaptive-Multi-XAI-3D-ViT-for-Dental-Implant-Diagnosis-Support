@@ -278,7 +278,11 @@ def main() -> None:
     # ---- report the three claims ----------------------------------------
     print("\n" + "=" * 74)
     print("ADAPTIVE LAYER — the three claims")
-    print(f"weighted BY: {WEIGHT_METRIC}   evaluated ON: {EVAL_METRIC} (lower is better)")
+    # The direction depends on the target and the scoring mode, so it is
+    # stated conditionally rather than asserted. See run_faithfulness.
+    direction = ("lower is better" if target < len(bin_names)
+                 else f"direction not founded for a millimetre head at score={args.score!r}")
+    print(f"weighted BY: {WEIGHT_METRIC}   evaluated ON: {EVAL_METRIC} ({direction})")
     print("=" * 74)
 
     # eval_metric holds the metric's NAME, not a score, and the prefix match

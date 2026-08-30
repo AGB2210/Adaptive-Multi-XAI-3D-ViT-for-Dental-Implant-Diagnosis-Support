@@ -247,7 +247,21 @@ def main() -> None:
 
     print("\n" + "=" * 86)
     print(f"FAITHFULNESS — {dataset}/{args.split}, n={len(ids)} cases")
-    print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better")
+    # ONLY FOR A PROBABILITY TARGET. The metric assumes a score that rises
+    # with evidence for the class; a millimetre head is not that -- deleting
+    # voxels moves a length toward whatever the baseline implies, which may
+    # be larger or smaller, so neither direction is founded under
+    # score="response". Under score="deviation" the negated absolute change
+    # restores the assumption and the usual reading applies again.
+    if target < n_bin:
+        print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better")
+    elif args.score == "deviation":
+        print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better"
+              "   (millimetre head, restored by score=deviation)")
+    else:
+        print(f"target {label_names[target]!r} is a MILLIMETRE head at "
+              f"score={args.score!r}: neither direction is founded here. "
+              f"Compare methods, do not rank them against an absolute.")
     print("=" * 86)
     cols = ["deletion_auc", "insertion_auc", "bone_mass_fraction", "bone_enrichment"]
     # pandas `.mean()` skips NaN, and `bone_mass_fraction` / `bone_enrichment`
