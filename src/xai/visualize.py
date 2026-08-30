@@ -201,7 +201,12 @@ def pareto_curve(rows: list[dict], path, title: str = "") -> None:
                label="always full ensemble")
 
     ax.set_xlabel("mean measured compute cost per case (seconds)")
-    ax.set_ylabel("mean faithfulness (deletion AUC, lower is better)")
+    # "lower is better" holds for a PROBABILITY target, where deleting evidence
+    # is supposed to drive the score down. On a millimetre head under
+    # score="response" it is not founded -- deleting voxels moves a length toward
+    # whatever the baseline implies, which may be larger or smaller -- so the
+    # axis says which metric it is and leaves the direction to the reader.
+    ax.set_ylabel("mean deletion AUC")
     ax.set_title(title or f"Compute vs faithfulness Pareto curve (n = {n} cases)", fontsize=11)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=9)
