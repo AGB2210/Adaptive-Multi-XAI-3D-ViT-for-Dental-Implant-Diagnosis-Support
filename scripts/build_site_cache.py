@@ -21,8 +21,9 @@ WHAT THIS DOES DO, and it has to match src/data/implant_sites.py exactly:
   * clips to the fixed HU window and z-scores on foreground, as before
 
 DISK. MEASURED over the whole cohort on the rented box: 522 volumes, 26.4 GB,
-about 19 minutes. Scans average ~48 MB at float16, and ten of the 532 are
-refused for ambiguous orientation.
+about 19 minutes. That is ~50.6 MB per scan at float16 -- derived from the two
+figures above rather than measured separately, which is why it is stated as
+their quotient. Ten of the 532 scans are refused for ambiguous orientation.
 
 This line previously read "a 410x410x273 scan is ~92 MB, so 532 scans is roughly
 49 GB", extrapolated from one scan. The runbook made the same class of mistake
@@ -135,7 +136,7 @@ def main() -> None:
     ap.add_argument("--config", default="configs/sites.yaml")
     ap.add_argument("--dataset", default=None)
     ap.add_argument("--limit", type=int, default=0,
-                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against 48 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
+                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against ~50.6 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
     ap.add_argument("--force", action="store_true", help="rebuild volumes already cached")
     args = ap.parse_args()
 

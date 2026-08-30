@@ -250,7 +250,7 @@ def main() -> None:
     ap.add_argument("--dataset", default="all",
                     help="a dataset name from the config, or 'all'")
     ap.add_argument("--limit", type=int, default=0,
-                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against 48 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
+                    help="smoke-test only: the first N cases ALPHABETICALLY, which is not a sample -- ToothFairy3's prefixes group by sub-cohort, so the first 14 are all ToothFairy3F and averaged 104.9 MB against ~50.6 MB cohort-wide. Extrapolating from that is what produced the retracted 52 GB estimate")
     ap.add_argument("--workers", type=int, default=0, help="override cfg.preprocess.workers")
     ap.add_argument("--preview", type=int, default=0, help="write N preview montages per dataset")
     ap.add_argument("--force", action="store_true", help="re-process already-cached volumes")

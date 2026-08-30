@@ -47,7 +47,7 @@ finding, not an oversight — see `README.md`.
 **The cache is 26.4 GB over 522 volumes and builds in about 19 minutes** —
 measured on the rented box during the fold-0 run, over the whole cohort. It is
 float16 at native 0.3 mm; this pipeline deliberately does *no* downsampling, and
-scans average ~48 MB.
+scans average ~50.6 MB.
 
 This line used to read "~100 MB per scan × 532 ≈ 52 GB", and that was wrong in a
 way worth keeping on the page. It was extrapolated from the 14 scans cached on
