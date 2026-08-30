@@ -352,7 +352,35 @@ def measure_site(
 
     width, width_fallback = ridge_width(mask, centre, crest, jaw, spacing,
                                        probe_mm=width_probe_mm, search_mm=width_search_mm)
-    return SiteMeasurement(jaw, float(crest * spacing[2]), float(max(height, 0.0)),
+
+    # A NEGATIVE HEIGHT IS IMPOSSIBLE, NOT SMALL. It means the limiting
+    # structure was found at or above the crest -- a canal roof above the ridge,
+    # or a sinus floor below it -- which cannot occur in a patient and says the
+    # crest or the structure was mis-located on this column.
+    #
+    # This used to be `max(height, 0.0)`, which mapped an impossible NEGATIVE
+    # and a genuine zero onto the same value. A genuine zero exists -- a canal
+    # roof exactly at the crest is really no bone above the nerve -- so the
+    # clamp did not invent every zero it produced; what it destroyed was the
+    # ability to tell the two apart.
+    #
+    # The ToothFairy3 build has 38 sites at exactly 0.0 mm across 32 patients
+    # (24 bone_extent, 11 nerve, 3 sinus), 10 of them carrying needs_implant=1
+    # and so trained on as regression targets. How many were clamped failures
+    # rather than true zeros CANNOT be recovered from that CSV, because the
+    # clamp already erased the distinction -- a rebuild is what separates them.
+    # For scale: the median measurable height is 14.4 mm and the 1st percentile
+    # is 0.6 mm, and 23 of the 38 also failed the width probe, which is what a
+    # degenerate column looks like rather than unusual anatomy.
+    #
+    # NaN sends them through `drop_unmeasurable`, which is where a measurement
+    # that could not be made belongs.
+    if not np.isfinite(height) or height < 0:
+        return SiteMeasurement(jaw, float(crest * spacing[2]), float("nan"),
+                               float(width), "impossible_geometry", n_bone,
+                               bool(width_fallback))
+
+    return SiteMeasurement(jaw, float(crest * spacing[2]), float(height),
                            float(width), limiter, n_bone, bool(width_fallback))
 
 
@@ -398,7 +426,14 @@ def ridge_width(mask, centre, crest_z: int, jaw: str, spacing,
     plane = sub[:, :, 0]
     slab = (plane == JAW_LABEL[jaw]) | np.isin(plane, TOOTH_LABELS)
     if not slab.any():
-        return 0.0, False
+        # No bone and no tooth anywhere in the probe plane: the width could not
+        # be measured, which is NaN, not a measured 0.0 mm. The height path
+        # already returns NaN for its equivalent ("no_bone") and this was the
+        # one place that disagreed. Latent rather than live -- the ToothFairy3
+        # build has no site at exactly 0.0 mm width -- but a 0.0 here would read
+        # as a knife-edge ridge and fail the width rule as if it had been
+        # measured.
+        return float("nan"), False
 
     cx = int(np.clip(c[0], 0, slab.shape[0] - 1))
     cy = int(np.clip(c[1], 0, slab.shape[1] - 1))

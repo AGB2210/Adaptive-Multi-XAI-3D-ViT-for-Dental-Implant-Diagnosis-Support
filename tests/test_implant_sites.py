@@ -152,6 +152,50 @@ class TestMeasureSite:
         assert np.isnan(out.available_height_mm)
         assert out.n_bone_voxels == 0
 
+    def test_a_canal_above_the_crest_is_nan_not_zero(self):
+        """The sibling of `test_no_bone_is_nan_not_zero`, and it was not guarded.
+
+        `crest - canal_top` going negative means the canal roof sits at or above
+        the ridge crest, which cannot happen in a patient -- it says the crest or
+        the canal was mis-located on this column. `max(height, 0.0)` turned that
+        into a confident 0.0 mm: plausible-looking, extreme, and definitely
+        infeasible. It fired on 38 sites across 32 patients in the ToothFairy3
+        build, 10 of them carrying needs_implant=1 and so trained on as
+        regression targets, against a measurable median of 14.4 mm.
+        """
+        m = blank()
+        m[12:28, 15:25, 40:70] = LOWER_JAW
+        m[18:22, 18:22, 72:76] = IAC[0]      # canal entirely above the bone
+        out = measure_site(m, (20, 20, 0), "lower", SPACING)
+        assert out.limiting_structure == "impossible_geometry"
+        assert np.isnan(out.available_height_mm), (
+            "an impossible geometry must not be reported as 0.0 mm of bone")
+
+    def test_a_canal_straddling_the_crest_is_also_rejected(self):
+        m = blank()
+        m[12:28, 15:25, 40:70] = LOWER_JAW
+        m[18:22, 18:22, 66:76] = IAC[0]
+        out = measure_site(m, (20, 20, 0), "lower", SPACING)
+        assert np.isnan(out.available_height_mm)
+
+    def test_zero_is_reachable_but_only_when_it_is_real(self):
+        """A crest exactly at the canal roof is a true 0.0 mm; below it is not.
+
+        This is the line the clamp erased. `max(height, 0.0)` mapped both onto
+        the same value, so the CSV could not distinguish "no bone above the
+        nerve" from "the measurement failed". Only the second is now NaN.
+        """
+        def height_with_canal_at(cz):
+            m = blank()
+            m[12:28, 15:25, 40:70] = LOWER_JAW
+            m[18:22, 18:22, cz:cz + 4] = IAC[0]
+            return measure_site(m, (20, 20, 0), "lower", SPACING).available_height_mm
+
+        assert height_with_canal_at(66) == pytest.approx(0.0), (
+            "a canal roof exactly at the crest is genuinely zero bone")
+        assert np.isnan(height_with_canal_at(70)), (
+            "a canal roof above the crest is impossible, not zero")
+
     def test_rejects_an_unknown_jaw(self):
         with pytest.raises(ValueError, match="jaw"):
             measure_site(blank(), (20, 20, 0), "middle", SPACING)

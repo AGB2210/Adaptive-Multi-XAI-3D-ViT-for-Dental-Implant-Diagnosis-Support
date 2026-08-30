@@ -129,7 +129,7 @@ augment:
   flip_lr_prob: 0.0
   # rotate: ndimage.rotate(order=1) resamples with linear interpolation, which
   # blurs the native 0.3 mm detail that is the entire reason this task runs at
-  # native resolution and pays 52 GB of cache for it. At rotate_prob 0.5 that
+  # native resolution and pays 26.4 GB of cache for it. At rotate_prob 0.5 that
   # was half of every batch. Small rotations are also the slowest thing in the
   # loader, which makes the CPU the bottleneck rather than the GPU.
   rotate_deg: 0.0

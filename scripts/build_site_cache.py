@@ -91,7 +91,7 @@ def check_settings(out_dir: Path, cfg, force: bool) -> dict:
     either way. That is bug #14 in REPORT.md: a run trained on stale volumes and
     nothing said a word. The guard was written for the 128^3 cache and its
     constant was carried over here without the code, so this directory was
-    unprotected right up until the 52 GB build it most applies to.
+    unprotected right up until the 26.4 GB build it most applies to.
     """
     settings = cache_settings(cfg)
     path = out_dir / SETTINGS

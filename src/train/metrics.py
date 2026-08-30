@@ -252,7 +252,12 @@ def format_metrics(metrics: dict, label_names: list[str], title: str = "") -> st
         if has_ci:
             lo, hi = e.get("auroc_ci", [float("nan")] * 2)
             row += f"  [{lo:>5.3f},{hi:>6.3f}]"
-        row += f"{e['ap']:>8.3f}{e['f1']:>8.3f}{e['threshold']:>7.3f}"
+        # A pooled result has no single threshold -- each fold applied its own,
+        # tuned on its own validation split. `None` says that; inventing a
+        # number here is what leaked one tuned on the test set.
+        thr = e.get("threshold")
+        thr_txt = f"{thr:>7.3f}" if isinstance(thr, (int, float)) else f"{'per-fold':>7}"
+        row += f"{e['ap']:>8.3f}{e['f1']:>8.3f}{thr_txt}"
         lines.append(row)
 
     macro = f"{'MACRO':<18}{'':>5}{'':>7}{metrics['macro_auroc']:>8.3f}"

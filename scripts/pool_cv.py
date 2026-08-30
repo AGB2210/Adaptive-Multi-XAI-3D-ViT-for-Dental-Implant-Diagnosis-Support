@@ -42,7 +42,7 @@ from src.data.taskdef import (  # noqa: E402
 )
 from src.models import build_model  # noqa: E402
 from src.train.loop import load_checkpoint_file  # noqa: E402
-from src.train.metrics import evaluate, format_metrics  # noqa: E402
+from src.train.metrics import bootstrap_ci, evaluate, format_metrics  # noqa: E402
 from src.train.targets import (  # noqa: E402
     TargetSpec,
     format_regression,
@@ -104,6 +104,7 @@ def main() -> None:
 
     runs_root = Path(args.runs or cfg.train.out_dir)
 
+    fold_thresholds: dict[int, np.ndarray] = {}
     pooled_ids: list[str] = []
     pooled_true: list[np.ndarray] = []
     pooled_prob: list[np.ndarray] = []
@@ -163,6 +164,7 @@ def main() -> None:
         # hybrid head can be pooled without being retrained.
         thresholds = val.get("classification", val).get("thresholds", {})
         thr = np.array([thresholds[name] for name in labels[:n_bin]], dtype=np.float64)
+        fold_thresholds[k] = thr
         preds = (probs[:, :n_bin] >= thr).astype(int)
 
         # Binary block only: macro AUROC over a millimetre column is not a
@@ -231,8 +233,29 @@ def main() -> None:
 
     # F1 is recomputed from each fold's own thresholds rather than retuned on the
     # pooled set, so it stays comparable with the per-round numbers.
+    #
+    # `evaluate` above was called WITHOUT `thresholds`, so it ran `best_f1` on
+    # the pooled TEST set. That is a threshold tuned on the data it is scored
+    # against. Overwriting `f1` alone left two leaked values behind: the
+    # `threshold` it reported, and `f1_ci`, which was bootstrapped at that
+    # threshold. Both are replaced here -- the interval by bootstrapping the
+    # per-fold binary predictions directly, clustered on patients like every
+    # other interval in this file.
+    groups = np.asarray(patients_of(pooled_ids))
     for i, name in enumerate(binary_names):
-        pooled["per_label"][name]["f1"] = f1_from_binary(y_true[:, i], y_pred[:, i])
+        entry = pooled["per_label"][name]
+        entry["f1"] = f1_from_binary(y_true[:, i], y_pred[:, i])
+        if cfg.eval.bootstrap_n:
+            _, lo, hi = bootstrap_ci(y_true[:, i], y_pred[:, i], f1_from_binary,
+                                     cfg.eval.bootstrap_n, cfg.eval.bootstrap_ci,
+                                     cfg.seed + i, groups)
+            entry["f1_ci"] = [lo, hi]
+        # There is no single pooled threshold: each fold applied its own, tuned
+        # on its own validation split. Reporting one would invent it.
+        entry["threshold"] = None
+        entry["thresholds_by_fold"] = {str(k): float(fold_thresholds[k][i])
+                                       for k in sorted(fold_thresholds)}
+        pooled["thresholds"][name] = None
     pooled["macro_f1"] = float(np.mean([pooled["per_label"][n]["f1"] for n in binary_names]))
 
     print("\n" + format_metrics(pooled, binary_names,
