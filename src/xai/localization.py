@@ -95,7 +95,15 @@ def pointing_game(saliency, mask) -> bool:
 
 
 def mass_inside(saliency, mask) -> float:
-    """Share of total attribution mass that lands inside the mask."""
+    """Share of total POSITIVE attribution mass that lands inside the mask.
+
+    Integrated Gradients and GradientSHAP are signed, and "mass" is not defined
+    on a signed field -- a map of +1s and -1s can sum to zero while carrying
+    plenty of evidence. Negative attribution is clipped to zero, so this scores
+    evidence FOR the target only. The choice is applied identically to every
+    method, so the comparison across methods stays fair; what it means is that a
+    method is never credited for confidently ruling a region out.
+    """
     s, m = _as_numpy(saliency), _as_numpy(mask) > 0
     s = np.clip(s, 0.0, None)
     total = float(s.sum())

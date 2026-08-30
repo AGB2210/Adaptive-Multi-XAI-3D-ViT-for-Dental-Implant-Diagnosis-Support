@@ -387,3 +387,27 @@ def test_validation_skill_names_the_heads_that_did_not_contribute():
         "a head with no usable floor must be named, not silently dropped")
     assert "available_height_mm" not in parts
     assert np.isfinite(skill)
+
+
+def test_scaler_refuses_a_column_with_no_finite_training_value():
+    """NaN mean -> NaN targets -> NaN loss, which looks like a model that won't train.
+
+    C8d records this project losing time to exactly that symptom. The `std`
+    guard beside it was already there; the `mean` was not.
+    """
+    spec = TargetSpec(binary=["b"], millimetres=["available_height_mm"])
+    y = np.zeros((10, 2))
+    y[:, 1] = np.nan
+    with pytest.raises(ValueError, match="available_height_mm"):
+        spec.fit(y)
+
+
+def test_scaler_tolerates_some_missing_values():
+    """Only an EMPTY column is fatal -- partial NaN is the normal case."""
+    spec = TargetSpec(binary=["b"], millimetres=["available_height_mm"])
+    y = np.zeros((10, 2))
+    y[:, 1] = np.arange(10, dtype=float)
+    y[:3, 1] = np.nan
+    spec.fit(y)
+    assert np.isfinite(spec.mean).all()
+    assert np.isfinite(spec.std).all()

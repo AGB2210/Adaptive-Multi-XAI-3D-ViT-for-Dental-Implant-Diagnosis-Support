@@ -93,6 +93,21 @@ class TargetSpec:
         if not self.millimetres:
             return self
         mm = np.asarray(self.slice_mm(y), dtype=np.float64)
+
+        # A column with no finite value in the TRAINING split makes `nanmean`
+        # return NaN, and every standardised target with it -- which surfaces as
+        # a NaN loss and looks exactly like a model that will not train. C8d
+        # records this project losing time to that shape of symptom once
+        # already, so it is named here rather than diagnosed again.
+        usable = np.isfinite(mm).sum(axis=0)
+        if (usable == 0).any():
+            dead = [n for n, c in zip(self.millimetres, usable) if c == 0]
+            raise ValueError(
+                f"no finite training values for {dead} -- the standardiser cannot "
+                f"be fitted, and every target for {'that head' if len(dead) == 1 else 'those heads'} "
+                f"would become NaN. Check `drop_unmeasurable` and the label build."
+            )
+
         self.mean = np.nanmean(mm, axis=0)
         std = np.nanstd(mm, axis=0)
         # A constant column would divide by zero and make the head untrainable;
