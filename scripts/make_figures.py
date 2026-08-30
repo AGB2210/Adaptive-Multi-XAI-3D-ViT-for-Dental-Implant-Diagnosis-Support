@@ -1,14 +1,23 @@
 """Tri-planar overlay figures and the RESULTS.md scaffold.
 
-    python scripts/make_figures.py --checkpoint artifacts/runs/vit3d_vit3d/best.pt
+    python scripts/make_figures.py --config configs/sites.yaml         --checkpoint artifacts_sites/runs/cv_fold0/best.pt
 
 Generates one figure per selected case showing all four methods plus the fused
 map, labelled with predictions, calibrated confidences, and faithfulness scores.
 
 Cases are selected to be the ones a guide or examiner will actually ask about:
-highest confidence, lowest confidence, correct vs incorrect, and cases positive
-for the sparse auxiliary labels recorded by the label builder (nerve_proximity,
-bone_quality) — those are the clinically interesting ones.
+highest confidence, lowest confidence, and correct versus incorrect.
+
+`select_cases` can also group on auxiliary label columns (`nerve_proximity`,
+`bone_quality`). NEITHER EXISTS IN THE SITE CSV, so those groups never populate
+-- checked against `artifacts_sites/sites_toothfairy3.csv`. The code path is
+kept because it costs nothing and the columns may arrive, but it is not
+something this pipeline currently produces, and the previous version of this
+docstring described it as though it did.
+
+The example path above also used to read `artifacts/runs/vit3d_vit3d`, which
+`train.run_name` cannot produce: a single-split run is `vit3d`, a fold is
+`cv_fold{k}`, and the site task writes under `artifacts_sites`.
 """
 
 from __future__ import annotations
@@ -185,7 +194,12 @@ def main() -> None:
                 f"predicted: {', '.join(predicted) or 'none'}  |  true: {', '.join(truth) or 'none'}\n"
                 f"{'calibrated p' if target < n_bin else 'predicted'}="
                 f"{probs[i, target]:.3f}{'' if target < n_bin else ' mm'}"
-                f"   column headers show {EVAL_METRIC} (lower is better)"
+                # NOT "(lower is better)". That holds for a probability target,
+                # where deleting evidence is supposed to drive the score down.
+                # On a millimetre head it is not founded -- deleting voxels moves
+                # a length toward whatever the baseline implies. The caption
+                # names the metric and the scoring mode and stops there.
+                f"   column headers show {EVAL_METRIC} (score={args.score})"
             )
 
             path = figures / f"{group}_{pid}.png"
@@ -230,34 +244,59 @@ def write_results_scaffold(art: Path, temperature: float) -> None:
 - `calibration/calibration.json` (temperature T = {temperature:.4f})
 - `figures/` — tri-planar overlays, curves, agreement matrices, Pareto curve
 
-## 1. Classification (`results_classification.csv`)
-Primary test split vs external cohort zero-shot, per label, with bootstrap 95% CIs.
-State the mean AUROC shift and discuss it — do not explain it away.
+## 1. Does it learn? (`cv_pooled_metrics.json`, each fold's `metrics.json`)
+Every head against its NO-INFORMATION FLOOR -- AUROC 0.5, and the MAE of
+predicting the training median. A metric quoted without its floor is unreadable.
+Intervals must be clustered on PATIENTS, never rows: one jaw supplies up to
+fourteen sites.
 
-## 2. XAI methods (`xai_sanity.csv`, `xai_ig_completeness.csv`, `xai_runtime.csv`)
-- Synthetic planted-signal enrichment per method. Anything <= 1.0 is no better than chance.
+## 2. The clinical result (`threshold_sensitivity` in each `metrics.json`)
+Agreement between the recovered verdict and the measured one, ACROSS the
+threshold sweep rather than at one value. State the direction of the error --
+calling a site feasible when it is not is the unsafe direction beside a nerve.
+
+## 3. XAI methods (`xai_sanity.csv`, `xai_ig_completeness.csv`, `xai_runtime.csv`)
+- Synthetic planted-signal enrichment per method. Anything <= 1.0 is chance.
 - IG completeness relative error (must be < 5%).
-- Measured wall-clock per method — the adaptive layer's justification.
-- Note that plain attention rollout is class-agnostic; compare against grad_rollout.
+- Measured wall-clock per method -- the adaptive layer's justification.
+- Plain attention rollout is class-agnostic; compare against grad_rollout.
 
-## 3. Faithfulness (`results_faithfulness.csv`, `results_randomization.csv`)
-- Deletion (lower better) / insertion (higher better) AUC per method.
-- Model-randomisation: name any method whose map survives randomisation — it is an
-  edge detector, not an explanation.
-- Bone-mass proxy: state explicitly that it is intensity-threshold derived, not
-  clinical ground truth, and cannot identify *which* anatomy.
+## 4. Faithfulness (`results_faithfulness.csv`, `results_randomization.csv`)
+- Deletion and insertion AUC per method. STATE THE SETTINGS: the direction that
+  is "better" depends on them. For a probability target, deletion lower and
+  insertion higher. For a MILLIMETRE head under score="response" neither is
+  founded -- deleting voxels moves a length toward whatever the baseline
+  implies, which may be larger or smaller. Every row carries `baseline_kind` and
+  `score`; quote them beside the numbers.
+- Model-randomisation: name any method whose map survives -- it is an edge
+  detector, not an explanation. No pass/fail labels: Adebayo et al. define no
+  cutoff, so report rho with a patient-clustered interval and let the sign carry
+  the claim.
+- Bone-mass proxy: intensity-threshold derived, not clinical ground truth, and
+  it cannot say WHICH anatomy.
 
-## 4. Adaptive layer (`results_ablations.csv`, `results_pareto.csv`)
-Weighted BY `{WEIGHT_METRIC}`, evaluated ON `{EVAL_METRIC}` — never the same metric.
+## 5. Localisation against anatomy (`results_localization.csv`)
+Enrichment and pointing rate against the inferior alveolar canal, with
+patient-clustered intervals. Flag any method whose interval spans chance, and do
+not name a best localiser when the top methods overlap.
+
+## 6. Adaptive layer (`results_ablations.csv`, `results_pareto.csv`)
+Weighted BY `{WEIGHT_METRIC}`, evaluated ON `{EVAL_METRIC}` -- never the same metric.
 - Claim 1: fusion beats every individual method on the held-out metric?
 - Claim 2: agreement-weighted beats uniform averaging?
 - Claim 3: Pareto curve dominates both fixed policies?
 Report each as supported or not supported, with the fraction of cases.
 
-## 5. Limitations
-- Labels are rule-derived from free text, not clinical annotation.
-- Attribution is scored by deletion/insertion, not by overlap with anatomy.
-- n is small (~60 test patients); CIs are wide and single-label claims are weak.
+## 7. Limitations
+- Labels are derived GEOMETRICALLY from ToothFairy3's voxel masks by a rule set,
+  not read from clinical annotation. The thresholds are configuration and are
+  listed in the config.
+- Site positions for missing teeth are fitted from the remaining teeth, and each
+  row records which tier produced it. The weaker tiers are extrapolations.
+- Mandible only. The maxilla is excluded on measured grounds, not preference.
+- The achievable-ceiling control gives enrichment its denominator. Until it runs,
+  a low enrichment cannot be told apart from a method hitting the resolution
+  limit -- a token spans 2.4 mm and the canal is under 3 mm across.
 """, encoding="utf-8")
     log.info("wrote %s", path)
 
