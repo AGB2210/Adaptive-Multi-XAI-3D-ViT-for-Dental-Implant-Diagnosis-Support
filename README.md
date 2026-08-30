@@ -56,8 +56,12 @@ The localisation metric changed with it. It used to ask *"does the explanation
 point at the implant?"* — which metal passes trivially, and is how Integrated
 Gradients scored 86x chance while failing the randomisation check. It now asks
 *"the model says NOT feasible; does the explanation point at the inferior
-alveolar canal?"* The canal is a dark tube inside bone occupying 0.05-0.65% of a
-patch, so an edge detector cannot find it by accident.
+alveolar canal?"* The canal is a dark tube inside bone, and it is **small**:
+measured over the 485 scored patches its median share is **0.48%**, with the
+middle 90% running 0.014% to 0.92% and a full spread of 0.0002% to 1.40%. An
+edge detector cannot find it by accident — but a token spans 2.4 mm and the
+canal is under 3 mm across, which is the resolution caveat §C8i.5 of `REPORT.md`
+attaches to every enrichment figure.
 
 ## Quick start
 
@@ -67,7 +71,7 @@ export TOOTHFAIRY3_ROOT=/path/to/ToothFairy3     # never hard-coded
 # 1. sites -> labels  (CPU, ~20 min, reads masks only)
 python scripts/build_implant_labels.py --config configs/sites.yaml
 
-# 2. scans -> native-resolution cache  (26 GB over 522 scans, ~19 min, rented box)
+# 2. scans -> native-resolution cache  (26.4 GB over 522 scans, ~19 min, rented box)
 python scripts/build_site_cache.py --config configs/sites.yaml
 
 # 3. sanity gate before any real run (2 min, CPU)
@@ -270,10 +274,12 @@ scripts/       build_implant_labels, build_site_cache, train, evaluate,
 
 `scripts/build_labels.py`, `scripts/build_cache.py`, `src/data/dataset.py` and
 `configs/default.yaml`'s `task.labels` implement the earlier task — *is an
-implant, crown or bridge already present?* It is kept because it still runs, the XAI
-scripts still support it through the same `CaseSet`, and the randomisation
-findings below were measured on it. It is not the project's question. `configs/preprocess_256.yaml`
-belongs to the same path: a whole-head alternative, deliberately set aside.
+implant, crown or bridge already present?* It is kept because it still runs and
+the XAI scripts still support it through the same `CaseSet`. It is not the
+project's question, and **nothing published here is measured on it any more** --
+the randomisation values that were are gone, for the reason given under "the
+finding that survives the pivot". `configs/preprocess_256.yaml` belongs to the
+same path: a whole-head alternative, deliberately set aside.
 
 ## Datasets are configuration, never code
 
@@ -356,4 +362,20 @@ a site-detection step that does not exist here.
 
 ## CI
 
-Four gates, cheapest first: version → imports → ruff → pytest.
+Seven gates on every push, cheapest first, on Python 3.11 and 3.12:
+
+```
+version is the single source of truth   VERSION and pyproject must agree
+every module imports                    catches a script the tests never reach
+ruff                                    rules pinned in pyproject, linter pinned in CI
+pytest
+every config resolves                   out_dir must sit under artifacts_dir
+training runs end to end on synthetic    config -> loaders -> loss -> metrics -> checkpoint
+predictions come back in millimetres     on a REAL checkpoint, not a mock
+```
+
+The last three are the expensive ones and the reason they exist: each catches a
+fault that lived in a seam, produced a plausible number, and failed no unit
+test. The millimetres gate asserts on a trained checkpoint that the binary head
+reads 0.5 at logit zero and each millimetre head returns its training mean --
+which is what a sigmoided millimetre head cannot do.

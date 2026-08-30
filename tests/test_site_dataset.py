@@ -99,8 +99,9 @@ class TestLoadSites:
         assert "C" not in set(df.patient_id) or df[df.patient_id == "C"].feasible.notna().all()
 
     def test_the_maxilla_is_excluded_by_default(self, csv):
-        """Measured, not preferred: of the sites that need an implant, 91.8% are
-        measurable in the mandible and 4.3% in the maxilla. After an upper tooth
+        """Measured, not preferred: of the sites that need an implant, 93.4% are
+        measurable in the mandible (826 of 884) and 1.3% in the maxilla (36 of
+        2,682) -- recomputed from sites_toothfairy3.csv. After an upper tooth
         is lost the ridge resorbs and ToothFairy3's UpperJaw mask does not cover
         the remnant, so 98% of those sites have no bone at all. Training on them
         would reproduce an annotation gap as a clinical verdict."""
