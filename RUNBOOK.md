@@ -184,19 +184,14 @@ later be mistaken for results.
 **Most of this has already been run once.** All five folds are trained and
 pooled, the XAI suite is complete with patient-clustered intervals, the
 faithfulness diagnosis has been done with `--baseline mean --score deviation`,
-and a CNN baseline exists for fold 0. That run cost about ₹455 and its outputs
-live on the box that produced them.
+and a CNN baseline was measured on fold 0. That run cost about ₹455 and its
+outputs live on the box that produced them.
 
 So read this section as two different things depending on who you are. **If you
 are reproducing the run**, everything below still applies exactly as written.
-**If you are adding to it**, only three things are outstanding, and only the
-first costs GPU time:
-
-| | |
-|---|---|
-| CNN folds 1-4, then pool | ~₹200. One fold is not a result, and this is the run that decides whether the transformer was worth using |
-| XAI re-run on the CNN checkpoint | Same commands as §4d, different `--checkpoint`. It answers whether Integrated Gradients still fails randomisation on a different backbone |
-| The two CPU-only runs in §4e | Free. The ceiling control is the last missing denominator for every enrichment figure |
+**If you are adding to it, nothing here needs a GPU.** The two outstanding items
+are the CPU-only runs in §4e, and the ceiling control among them is the last
+missing denominator for every enrichment figure.
 
 
 ### 4a. Measure every site — about 30 min, CPU only
@@ -295,11 +290,11 @@ Then pool them, so every case is predicted once by a model that never saw it:
 python scripts/pool_cv.py --config configs/sites.yaml --folds 5
 ```
 
-**Train the CNN baseline the same way**, with `--model cnn3d`. Fold 0 exists and
-it beat the ViT on every measure with 2.8x fewer parameters, so folds 1-4 are
-not optional politeness toward a baseline — they decide which model the paper is
-about. Run all five and pool them exactly as above; a single fold's validation
-split cannot be compared against a pooled five-fold number.
+`--model cnn3d` trains the CNN baseline through the same loop. **It is not on
+the run list.** Fold 0 was measured and the CNN is ahead there; architecture
+selection is outside this project's scope, since the contribution is the
+explainability framework and the backbone is the vehicle it runs on. The flag is
+documented because it exists, not because anything is waiting on it.
 
 ### 4d. Explainability
 
@@ -328,9 +323,8 @@ checkpoint:
 python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --only-randomization
 ```
 
-Run it on the CNN checkpoint when that exists. Whether Integrated Gradients
-still changes least under randomisation on a different backbone is the most
-interesting unanswered question in the project.
+Every XAI figure in this project is measured on the ViT, and none is claimed to
+generalise to another backbone.
 
 All five use fold 0's checkpoint.
 

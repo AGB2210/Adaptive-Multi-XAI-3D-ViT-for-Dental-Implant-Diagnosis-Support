@@ -37,7 +37,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.954 [0.944, 0.963] over 6,787 sites, each scored once by the model that never saw it |
-| Baselines | **CNN trained on fold 0, and it beats the ViT on every measure with 2.8x fewer parameters.** Its folds 1–4 are not run, so nothing from it is cross-validated yet. The geometric estimator is written and never run on real scans |
+| Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator is written and never run on real scans |
 | Guide sign-off on clinical thresholds | **Pending** |
 
 **The headline result is a negative one, and it is stated here rather than
@@ -256,7 +256,7 @@ src/data/      preprocessing, caches, augmentation, splits
                implant_sites  bone height / ridge width / nerve clearance, in mm
                dental_arch    where a tooth site is when the tooth is gone
                site_dataset   one sample per site, patches at native resolution
-src/models/    vit3d (from scratch), cnn3d baseline (written, never trained),
+src/models/    vit3d (from scratch), cnn3d baseline (one fold, not pursued),
                geometric (threshold-and-measure baseline, CPU only)
 src/train/     training loop, metrics with bootstrap CIs
 src/xai/       rollout, IG, GradientSHAP, Grad-CAM, LIME (ablation only),
