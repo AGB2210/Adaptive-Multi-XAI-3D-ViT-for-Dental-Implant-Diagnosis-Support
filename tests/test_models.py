@@ -46,11 +46,23 @@ def test_forward_output_shape():
     assert logits.dtype == torch.float32
 
 
-def test_token_count_matches_the_documented_geometry():
-    """128 input -> stem 64 -> patch 8 -> 8x8x8 = 512 tokens, as specified."""
-    model = ViT3D(img_size=128, patch_size=8, embed_dim=32, depth=1, num_heads=4, stem_channels=8)
-    assert model.grid_size == (8, 8, 8)
-    assert model.pos_embed.shape == (1, 512 + 1, 32)
+def test_token_count_follows_the_stem_stride_and_the_patch_size():
+    """One token spans 2 * patch_size INPUT voxels, because the stem has stride 2.
+
+    Both configurations, because getting this wrong is what put a token at
+    4.8 mm -- wider than the canal the explanations exist to resolve -- while
+    the docs said 2.4 mm.
+    """
+    # The superseded whole-volume setting: 128 -> stem 64 -> patch 8 -> 512.
+    old = ViT3D(img_size=128, patch_size=8, embed_dim=32, depth=1, num_heads=4, stem_channels=8)
+    assert old.grid_size == (8, 8, 8)
+    assert old.pos_embed.shape == (1, 512 + 1, 32)
+
+    # The site setting actually in use: 96 -> stem 48 -> patch 4 -> 1,728.
+    site = ViT3D(img_size=96, patch_size=4, embed_dim=32, depth=1, num_heads=4, stem_channels=8)
+    assert site.grid_size == (12, 12, 12)
+    assert site.pos_embed.shape == (1, 12**3 + 1, 32)
+    assert 96 / 12 * 0.3 == pytest.approx(2.4), "a token must span 2.4 mm at 0.3 mm"
 
 
 def test_attention_weights_shape_and_normalisation():
