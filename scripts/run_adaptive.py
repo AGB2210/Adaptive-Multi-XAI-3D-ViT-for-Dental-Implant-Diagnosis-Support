@@ -286,8 +286,12 @@ def main() -> None:
     eval_cols = [c for c in ablations.columns
                  if c.startswith("eval_") and pd.api.types.is_numeric_dtype(ablations[c])]
     print("\nmean held-out score per method:")
+    # `.mean()` skips NaN, so an ordering built from it can rank methods scored
+    # on different subsets of cases. Print the count alongside: equal counts mean
+    # the ordering is like for like, unequal ones mean it is not.
     for col in sorted(eval_cols, key=lambda c: ablations[c].mean()):
-        print(f"   {col.replace('eval_', ''):<24}{ablations[col].mean():.4f}")
+        print(f"   {col.replace('eval_', ''):<24}{ablations[col].mean():.4f}"
+              f"   n={int(ablations[col].notna().sum())}")
     print(f"   {'FUSED (agreement-weighted)':<24}{ablations['fused_eval'].mean():.4f}")
     print(f"   {'UNIFORM ensemble':<24}{ablations['uniform_eval'].mean():.4f}")
 

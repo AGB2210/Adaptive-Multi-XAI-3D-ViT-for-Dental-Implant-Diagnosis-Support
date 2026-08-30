@@ -196,6 +196,16 @@ def check_disjoint(splits: dict[str, list[str]]) -> None:
 
 
 def split_prevalence(splits: dict[str, list[str]], patient_ids: list[str], y: np.ndarray) -> dict:
+    """Per-split column means over PATIENTS, not over sites.
+
+    `y` here is the `patient_label_matrix` output, which is `groupby(patient_id)
+    .max()`. So for a binary column this is "fraction of patients with ANY
+    positive site" -- not site prevalence, and higher than it. For a millimetre
+    column it is the mean of each patient's MAXIMUM, which is not a prevalence
+    at all and sits under that key only because the function predates the
+    regression pivot. Written to `splits.json` on single-split runs; the project
+    runs cross-validation, so nothing currently reads it.
+    """
     index = {pid: i for i, pid in enumerate(patient_ids)}
     return {
         name: {

@@ -189,6 +189,11 @@ def make_site_loaders(cfg, splits, sites, cache_dir, args, targets):
 
     for name in ("train", "val", "test"):
         subset = sites_for_patients(sites, splits[name])
+        # One PATIENT id per SITE row, so this slot holds ~14 duplicates per
+        # patient where `make_loaders` puts one id per sample. Only `len()`
+        # reads it, which gives the right site count -- but `set()` or
+        # `nunique()` here would silently return patients, and that is the
+        # confusion that cost this project a published interval claim.
         matrices[name] = (subset.patient_id.tolist(), target_matrix(subset, targets))
         dataset = SitePatchDataset(
             cache_dir, subset, targets=targets, patch_size=patch,
@@ -373,7 +378,14 @@ def main() -> None:
         for name, m in mm_floor.items():
             print(f"  {name:<22} MAE floor {m['mae']:6.3f} mm   "
                   f"RMSE floor {m['rmse']:6.3f} mm")
-    print("  a training loss at or above this has learned nothing")
+    # NOT comparable to the training loss on the hybrid task. That loss is
+    # BCE(binary) + mm_weight * Huber(STANDARDISED mm); the binary floor is a
+    # BCE over one block and the millimetre floor is an MAE in RAW mm, so
+    # neither is on the loss's scale and their sum is not either -- ~6.9 mm of
+    # height floor sits beside a Huber term of order 0.4. Each floor belongs to
+    # its own head's metric, which is what `validation_skill` already does.
+    print("  each floor belongs to its own head's METRIC, not to the training "
+          "loss -- a head at or above its floor has learned nothing")
 
     if n_bin:
         baseline = PrevalenceBaseline(n_bin).fit(y_train[:, :n_bin])
