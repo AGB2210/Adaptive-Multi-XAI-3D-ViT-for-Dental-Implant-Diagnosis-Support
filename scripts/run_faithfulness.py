@@ -217,7 +217,8 @@ def main() -> None:
 
         if case_index == 0:
             deletion_insertion_curves(results, figures / f"deletion_insertion_{dataset}_{pid}.png",
-                                      title=f"{dataset} / {pid} / target={label_names[target]}")
+                                      title=f"{dataset} / {pid} / target={label_names[target]}",
+                                      target_is_probability=(target < n_bin))
             agreement_heatmap(matrix, figures / f"agreement_spearman_{dataset}_{pid}.png",
                               "spearman", f"Inter-method agreement — {pid}")
 

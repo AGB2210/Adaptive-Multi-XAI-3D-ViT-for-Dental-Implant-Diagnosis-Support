@@ -43,6 +43,7 @@ from src.xai.runner import (
     load_model,
     require_prerequisites,
     resolve_fold,
+    select_cases,
     training_baselines,
     xai_setting,  # noqa: E402
 )
@@ -162,7 +163,22 @@ def main() -> None:
     if not selected:
         raise SystemExit(f"no cases with {filter_col}=={want} in the fold-{fold} test split")
     n_available = len(selected)
-    selected = selected[: args.n_cases]
+    # `selected[:n]` is not a sample. The case list comes out of the CSV in
+    # (patient, tooth) order, so the first 200 sites are the first ~15 patients
+    # -- one contiguous alphabetical block -- and the patient-clustered
+    # intervals below would then be computed over a handful of jaws while
+    # looking exactly like every other interval in the report. `select_cases`
+    # draws at a fixed seed and prints the patient count; this was the one XAI
+    # script that never adopted it.
+    #
+    # `localization_cases` in the config was also dead: `xai_setting` was
+    # imported here and called only for `ig_steps`, so the block existed and
+    # nothing read it -- the same failure `xai_setting` was written to end.
+    n_cases = xai_setting(cfg, "localization_cases", args.n_cases, n_available)
+    sel_ids, sel_y = select_cases([p for p, _ in selected],
+                                  np.asarray([r for _, r in selected]),
+                                  n_cases, cfg.seed, log)
+    selected = list(zip(sel_ids, sel_y))
     log.info("%d cases with %s==%d in fold-%s test, explaining '%s' (scoring %d)",
              n_available, filter_col, want, fold, label, len(selected))
 

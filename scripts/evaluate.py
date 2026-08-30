@@ -43,6 +43,7 @@ from src.utils.seed import set_seed  # noqa: E402
 from src.xai.runner import (  # noqa: E402
     load_case_set,
     model_img_size,
+    patients_of,
     predict_case_logits,
 )
 
@@ -125,9 +126,16 @@ def main() -> None:
     # numbers that are not wrong so much as meaningless, since 18 mm is not a
     # probability and AP over it is not defined.
     mm_names = regression_names_for(cfg)
+    # Cluster the interval on patients. On the site task `ids` are `patient#tooth`
+    # and one jaw supplies up to fourteen of them, so a row bootstrap would treat
+    # fourteen views of one patient as fourteen independent draws. `groups=None`
+    # is correct only when a row already is a patient, which is the whole-volume
+    # case below.
+    groups = np.asarray(patients_of(ids)) if cases.is_sites else None
     metrics = evaluate(targets[:, :n_bin], probs[:, :n_bin], labels[:n_bin],
                        thresholds=thresholds,
-                       n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+                       n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci,
+                       groups=groups)
     print("\n" + format_metrics(metrics, labels[:n_bin],
                                 f"{primary} {args.split} (n={len(ids)})"))
     results[f"{primary}_{args.split}"] = metrics

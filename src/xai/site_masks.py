@@ -31,7 +31,7 @@ import nibabel as nib
 import numpy as np
 
 from src.data.implant_sites import IAC, INCISIVE_CANAL, LOWER_JAW, UPPER_JAW, superior_sign
-from src.data.site_dataset import cut_patch
+from src.data.site_dataset import cut_patch, patch_centre
 
 # The structures worth scoring an explanation against, and what each one means
 # if the saliency lands on it.
@@ -52,9 +52,18 @@ def patch_masks(
 ) -> dict:
     """Binary masks for each structure, cropped exactly like the model's input.
 
-    The crop must match `CaseSet.load` voxel for voxel, including the z flip:
-    a mask offset by even a few voxels would score the explanation against
-    anatomy that is not where the model was looking.
+    The crop must match `CaseSet.load` voxel for voxel, and there are TWO things
+    to match, not one. The z flip is the obvious half. The other is the
+    quarter-shift `patch_centre` applies to push the box toward the structure
+    that decides the answer -- 24 voxels at `patch_size=96`, which is 7.2 mm at
+    0.3 mm spacing.
+
+    This function honoured the flip and built its own centre from raw `site_z`,
+    so for three releases every mask was cut 7.2 mm from the box the model was
+    actually shown, and every number in `results_localization.csv` scored a
+    saliency map against anatomy that was not where the model was looking. The
+    centre now comes from `patch_centre` itself. Do not reconstruct it here: a
+    second implementation of the crop is exactly what went wrong.
     """
     structures = structures or SITE_STRUCTURES
     mask = np.asarray(nib.load(str(mask_path)).dataobj)
@@ -64,10 +73,8 @@ def patch_masks(
     if superior_sign(mask) == -1:
         mask = mask[:, :, ::-1]
 
-    z = site_row.get("site_z", np.nan) if hasattr(site_row, "get") else site_row["site_z"]
-    if not np.isfinite(z):
-        z = mask.shape[2] / 2.0
-    centre = (site_row["site_x"], site_row["site_y"], z)
+    # The model's own centring function, not a copy of it.
+    centre = patch_centre(site_row, mask.shape, int(patch_size))
 
     out = {}
     for name, labels in structures.items():

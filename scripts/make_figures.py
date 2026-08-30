@@ -177,7 +177,8 @@ def main() -> None:
             path = figures / f"{group}_{pid}.png"
             method_comparison_figure(volume, maps, path, title=title, scores=scores)
             manifest.append({
-                "group": group, "patient_id": pid, "target_label": label_names[target],
+                "group": group, "case_id": pid, "patient_id": cases.patient_of(pid),
+                "target_label": label_names[target],
                 "target_value": float(probs[i, target]),
                 "target_unit": "probability" if target < n_bin else "mm",
                 "baseline_kind": args.baseline,

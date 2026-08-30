@@ -326,3 +326,41 @@ class TestReportUnits:
     def test_a_legacy_checkpoint_is_treated_as_all_binary(self):
         report = to_report_units(np.zeros((3, 4), dtype=np.float32), TargetSpec())
         assert np.allclose(report, 0.5)
+
+
+# --- An unmeasurable site is not an infeasible one ----------------------------
+#
+# `derived_feasible` returned float32 0/1 unconditionally, so `nan >= 12.0`
+# being False turned "could not measure" into a confident "not feasible". The
+# `seen` mask in `threshold_sensitivity` was written to catch exactly that and
+# was inert, because the values reaching it were never NaN. The geometric
+# baseline declines to answer on ~20% of sites by design and prints that count
+# one line before feeding the same array in.
+
+NAMES = ["available_height_mm", "ridge_width_mm"]
+RULES = {"min_height_mandible_mm": 12.0, "min_width_mm": 6.0}
+
+
+def test_unmeasurable_site_is_nan_not_infeasible():
+    mm = np.array([[15.0, 7.0], [np.nan, 7.0], [15.0, np.nan]])
+    got = derived_feasible(mm, NAMES, RULES)
+    assert got[0] == 1.0
+    assert np.isnan(got[1]), "a missing height must not read as 'not feasible'"
+    assert np.isnan(got[2]), "a missing width must not read as 'not feasible'"
+
+
+def test_two_failed_measurements_do_not_count_as_agreement():
+    """The worst form of the bug: agreement manufactured out of two failures."""
+    true = np.array([[np.nan, np.nan], [15.0, 7.0]])
+    pred = np.array([[np.nan, np.nan], [15.0, 7.0]])
+    row = threshold_sensitivity(true, pred, NAMES, RULES, sweep=(12.0,))[0]
+    assert row["n"] == 1, "the unmeasurable row must be excluded, not agreed with"
+    assert row["agreement"] == 1.0
+
+
+def test_n_reports_the_sites_both_sides_could_measure():
+    true = np.tile(np.array([[15.0, 7.0]]), (10, 1))
+    pred = true.copy()
+    pred[:4] = np.nan
+    row = threshold_sensitivity(true, pred, NAMES, RULES, sweep=(12.0,))[0]
+    assert row["n"] == 6

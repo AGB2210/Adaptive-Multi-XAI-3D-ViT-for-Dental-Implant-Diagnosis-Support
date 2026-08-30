@@ -51,6 +51,7 @@ from src.xai.runner import (
     explanation_target,
     load_case_set,
     load_model,
+    patients_of,
     predict_case_logits,
     require_prerequisites,
     resolve_fold,
@@ -140,13 +141,22 @@ def main() -> None:
     probs_after = apply_temperature(val_bin_logits, temperature)
     ece_after, bins_after = expected_calibration_error(probs_after, val_bin_y)
 
+    # `val_ids` holds CASE ids -- `patient#tooth` on the site task -- so its
+    # length is a site count, not a patient count. Reporting it as patients
+    # overstated the sample by an order of magnitude (1339 against 97) and is
+    # the same fault as the `patient_id` column that defeated the clustered
+    # bootstrap. Both counts are written, each under its own name.
+    n_cases = len(val_ids)
+    n_patients = len(set(patients_of(val_ids)))
     (art / "calibration").mkdir(parents=True, exist_ok=True)
     reliability_diagram(bins_before, bins_after, ece_before, ece_after,
                         art / "calibration" / "reliability.png",
-                        title=f"Validation calibration (n={len(val_ids)} patients x {len(bin_names)} binary labels)")
+                        title=f"Validation calibration (n={n_cases} cases from "
+                              f"{n_patients} patients x {len(bin_names)} binary labels)")
     (art / "calibration" / "calibration.json").write_text(json.dumps({
         "temperature": temperature, "ece_before": ece_before, "ece_after": ece_after,
-        "n_val_patients": len(val_ids), "fitted_on": "validation split only",
+        "n_val_cases": n_cases, "n_val_patients": n_patients,
+        "fitted_on": "validation split only",
         "calibrated_labels": list(bin_names),
     }, indent=2), encoding="utf-8")
 
@@ -205,7 +215,11 @@ def main() -> None:
                       score=args.score)
 
         rows.append({
-            "patient_id": pid,
+            # `pid` is a case id -- `patient#tooth`. Both go in, each under its
+            # own name, so a bootstrap over this file can cluster correctly and
+            # `RUNBOOK.md` 6's check passes.
+            "case_id": pid,
+            "patient_id": cases.patient_of(pid),
             "target_label": label_names[target],
             # In the target's own unit: a calibrated probability for a binary
             # head, millimetres for a millimetre head. The old column was named

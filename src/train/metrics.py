@@ -96,8 +96,27 @@ def bootstrap_ci(
     n_boot: int = 2000,
     ci: float = 0.95,
     seed: int = 0,
+    groups: np.ndarray | None = None,
 ) -> tuple[float, float, float]:
-    """(point estimate, lo, hi) by percentile bootstrap over patients."""
+    """(point estimate, lo, hi) by percentile bootstrap, clustered on `groups`.
+
+    `groups` is one label per row saying which INDEPENDENT unit the row belongs
+    to -- a patient. Pass it whenever a unit contributes more than one row.
+
+    ON THE SITE TASK A ROW IS NOT AN INDEPENDENT DRAW. One patient supplies up
+    to fourteen mandibular sites that share anatomy, field of view, scanner and
+    annotator, so resampling rows treats 6,787 correlated observations as 6,787
+    independent ones and returns an interval far narrower than the data
+    supports.
+
+    This docstring used to say "over patients" while the code resampled rows,
+    and it stayed that way through every AUROC interval this project published.
+    On the Part B whole-scan task the claim was true -- one row really was one
+    patient -- and it silently stopped being true when the task moved to sites.
+    `groups=None` therefore means "every row is its own unit", which is correct
+    for a whole-volume task and wrong for a per-site one; the caller must say
+    which, because this function cannot tell.
+    """
     y_true = np.asarray(y_true)
     y_score = np.asarray(y_score)
     point = fn(y_true, y_score)
@@ -105,9 +124,21 @@ def bootstrap_ci(
     rng = np.random.default_rng(seed)
     n = len(y_true)
     stats = np.empty(n_boot, dtype=np.float64)
-    for b in range(n_boot):
-        idx = rng.integers(0, n, size=n)
-        stats[b] = fn(y_true[idx], y_score[idx])
+
+    if groups is None:
+        for b in range(n_boot):
+            idx = rng.integers(0, n, size=n)
+            stats[b] = fn(y_true[idx], y_score[idx])
+    else:
+        groups = np.asarray(groups)
+        if len(groups) != n:
+            raise ValueError(f"groups has {len(groups)} entries for {n} rows")
+        _, inverse = np.unique(groups, return_inverse=True)
+        members = [np.flatnonzero(inverse == g) for g in range(inverse.max() + 1)]
+        k = len(members)
+        for b in range(n_boot):
+            idx = np.concatenate([members[i] for i in rng.integers(0, k, k)])
+            stats[b] = fn(y_true[idx], y_score[idx])
 
     stats = stats[np.isfinite(stats)]
     if stats.size == 0:
@@ -124,12 +155,15 @@ def evaluate(
     n_boot: int = 0,
     ci: float = 0.95,
     seed: int = 0,
+    groups: np.ndarray | None = None,
 ) -> dict:
     """Per-label AUROC / AP / F1 plus macro averages.
 
     `thresholds` should come from the validation split; if omitted, F1 is tuned
     on the data passed in (correct for val, leaky for test -- pass them in).
-    Set n_boot > 0 for confidence intervals.
+    Set n_boot > 0 for confidence intervals. **Pass `groups` with them on any
+    task where one patient contributes several rows**, or every interval below
+    will be narrower than the data supports -- see `bootstrap_ci`.
     """
     y_true = np.asarray(y_true)
     y_score = np.asarray(y_score, dtype=np.float64)
@@ -154,11 +188,12 @@ def evaluate(
         }
 
         if n_boot:
-            _, lo, hi = bootstrap_ci(yt, ys, auroc, n_boot, ci, seed + i)
+            _, lo, hi = bootstrap_ci(yt, ys, auroc, n_boot, ci, seed + i, groups)
             entry["auroc_ci"] = [lo, hi]
-            _, lo, hi = bootstrap_ci(yt, ys, average_precision, n_boot, ci, seed + i)
+            _, lo, hi = bootstrap_ci(yt, ys, average_precision, n_boot, ci, seed + i, groups)
             entry["ap_ci"] = [lo, hi]
-            _, lo, hi = bootstrap_ci(yt, ys, lambda a, b, t=threshold: f1_at_threshold(a, b, t), n_boot, ci, seed + i)
+            _, lo, hi = bootstrap_ci(yt, ys, lambda a, b, t=threshold: f1_at_threshold(a, b, t),
+                                     n_boot, ci, seed + i, groups)
             entry["f1_ci"] = [lo, hi]
 
         out["per_label"][name] = entry
@@ -168,11 +203,21 @@ def evaluate(
         values = [out["per_label"][n][key] for n in label_names]
         out[f"macro_{key}"] = float(np.nanmean(values)) if np.isfinite(values).any() else float("nan")
 
-    if n_boot:  # macro AUROC CI, resampling patients once for all labels
+    if n_boot:  # macro AUROC CI, resampled once for all labels
         rng = np.random.default_rng(seed + 999)
+        if groups is None:
+            def _draw():
+                return rng.integers(0, len(y_true), size=len(y_true))
+        else:
+            _, inverse = np.unique(np.asarray(groups), return_inverse=True)
+            members = [np.flatnonzero(inverse == g) for g in range(inverse.max() + 1)]
+
+            def _draw():
+                return np.concatenate(
+                    [members[i] for i in rng.integers(0, len(members), len(members))])
         stats = []
         for _ in range(n_boot):
-            idx = rng.integers(0, len(y_true), size=len(y_true))
+            idx = _draw()
             vals = [auroc(y_true[idx, i], y_score[idx, i]) for i in range(len(label_names))]
             vals = [v for v in vals if np.isfinite(v)]
             if vals:

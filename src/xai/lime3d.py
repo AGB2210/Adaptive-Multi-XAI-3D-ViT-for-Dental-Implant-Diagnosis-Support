@@ -32,6 +32,7 @@ class Lime3D(SaliencyMethod):
         batch_size: int = 8,
         ridge_alpha: float = 1.0,
         seed: int | None = 0,
+        target_is_probability: bool = True,
     ):
         super().__init__(model, device)
         self.grid = grid
@@ -42,6 +43,12 @@ class Lime3D(SaliencyMethod):
         self.batch_size = batch_size
         self.ridge_alpha = ridge_alpha
         self.seed = seed
+        # A LOGIT SQUASHED IS FINE; A LENGTH SQUASHED IS NOT. The surrogate is
+        # fitted against these responses, and sigmoid is nonlinear -- so on a
+        # millimetre head it reweights the very differences the ridge is trying
+        # to explain, which is not something an affine map would do. Every other
+        # method here reads raw output for exactly this reason.
+        self.target_is_probability = target_is_probability
 
     @torch.no_grad()
     def _attribute_raw(self, volume: torch.Tensor, target_label: int) -> torch.Tensor:
@@ -65,7 +72,8 @@ class Lime3D(SaliencyMethod):
             m = torch.nn.functional.interpolate(m, size=tuple(volume.shape[2:]), mode="nearest")
 
             perturbed = volume * m + baseline * (1 - m)
-            responses.append(torch.sigmoid(self.model(perturbed)[:, target_label]).cpu())
+            out = self.model(perturbed)[:, target_label]
+            responses.append((torch.sigmoid(out) if self.target_is_probability else out).cpu())
 
         y = torch.cat(responses).double()
         X = masks.double()

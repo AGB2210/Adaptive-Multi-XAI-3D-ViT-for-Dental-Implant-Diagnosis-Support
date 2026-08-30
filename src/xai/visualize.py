@@ -95,8 +95,16 @@ def method_comparison_figure(
     plt.close(fig)
 
 
-def deletion_insertion_curves(results: dict, path, title: str = "") -> None:
-    """Deletion and insertion curves for every method on one case."""
+def deletion_insertion_curves(results: dict, path, title: str = "",
+                              target_is_probability: bool = True) -> None:
+    """Deletion and insertion curves for every method on one case.
+
+    `target_is_probability` must match what `deletion_insertion` was given. With
+    a millimetre head the y values are STANDARDISED lengths -- unbounded, often
+    negative, and under `score="deviation"` never positive. This axis was
+    hardcoded to "target-label probability" with `ylim(0, 1)`, which both
+    mislabelled the quantity and clipped the whole curve out of the frame.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -114,11 +122,14 @@ def deletion_insertion_curves(results: dict, path, title: str = "") -> None:
     axes[0].set_xlabel("fraction of voxels replaced by baseline")
     axes[1].set_title("Insertion — higher AUC is better")
     axes[1].set_xlabel("fraction of voxels restored")
+    ylabel = ("target-label probability" if target_is_probability
+              else "target output (standardised, not mm)")
     for ax in axes:
-        ax.set_ylabel("target-label probability")
+        ax.set_ylabel(ylabel)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
-        ax.set_ylim(0, 1)
+        if target_is_probability:
+            ax.set_ylim(0, 1)
     if title:
         fig.suptitle(title)
     fig.tight_layout()

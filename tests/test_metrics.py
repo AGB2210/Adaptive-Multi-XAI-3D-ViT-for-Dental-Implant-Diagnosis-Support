@@ -180,3 +180,70 @@ class TestNoInformationFloor:
         y = np.zeros((10, 2), dtype=np.float32)
         y[:5, 0] = 1.0
         assert no_information_bce(y)["prevalence"] == pytest.approx([0.5, 0.0])
+
+
+
+# --- The interval is clustered on patients ------------------------------------
+#
+# `bootstrap_ci` said "over patients" and resampled rows, for three releases. On
+# the Part B whole-scan task the claim was true -- one row was one patient. It
+# stopped being true when the task moved to sites, and nothing said so, so every
+# published AUROC interval was narrower than the data supported. The same fault
+# in the XAI bootstrap cost a published claim about Grad-CAM and IG.
+
+
+def _correlated(n_patients=40, per_patient=14, seed=0):
+    """Sites whose label and score are driven by their patient, not by luck."""
+    rng = np.random.default_rng(seed)
+    groups, y, s = [], [], []
+    for p in range(n_patients):
+        skill = rng.normal()
+        positive = p % 3 == 0
+        for _ in range(per_patient):
+            groups.append(f"P{p:03d}")
+            y.append(1 if positive else 0)
+            s.append(skill + (1.2 if positive else 0.0) + 0.1 * rng.normal())
+    return np.array(groups), np.array(y), np.array(s)
+
+
+def test_clustering_widens_the_interval():
+    groups, y, s = _correlated()
+    _, lo_row, hi_row = bootstrap_ci(y, s, auroc, n_boot=400, seed=1)
+    _, lo_pat, hi_pat = bootstrap_ci(y, s, auroc, n_boot=400, seed=1, groups=groups)
+    assert hi_pat - lo_pat > hi_row - lo_row, (
+        "resampling rows understates the interval when sites share a patient")
+
+
+def test_clustering_leaves_the_point_estimate_alone():
+    """Only the interval changes. A shifted estimate would mean a different bug."""
+    groups, y, s = _correlated()
+    p_row, _, _ = bootstrap_ci(y, s, auroc, n_boot=200, seed=1)
+    p_pat, _, _ = bootstrap_ci(y, s, auroc, n_boot=200, seed=1, groups=groups)
+    assert p_row == pytest.approx(p_pat, abs=1e-12)
+
+
+def test_one_row_per_patient_matches_no_grouping():
+    """The whole-volume task must be unaffected -- that is why None stays legal."""
+    rng = np.random.default_rng(3)
+    y = (rng.random(120) > 0.6).astype(int)
+    s = y + 0.4 * rng.normal(size=120)
+    groups = np.array([f"P{i:03d}" for i in range(120)])
+    _, lo_a, hi_a = bootstrap_ci(y, s, auroc, n_boot=300, seed=5)
+    _, lo_b, hi_b = bootstrap_ci(y, s, auroc, n_boot=300, seed=5, groups=groups)
+    assert hi_a - lo_a == pytest.approx(hi_b - lo_b, abs=0.05)
+
+
+def test_mismatched_groups_raise():
+    groups, y, s = _correlated(n_patients=4, per_patient=3)
+    with pytest.raises(ValueError):
+        bootstrap_ci(y, s, auroc, n_boot=10, groups=groups[:-1])
+
+
+def test_evaluate_threads_groups_through():
+    groups, y, s = _correlated()
+    yt, ys = y.reshape(-1, 1), s.reshape(-1, 1)
+    row = evaluate(yt, ys, ["needs_implant"], n_boot=300, seed=1)
+    pat = evaluate(yt, ys, ["needs_implant"], n_boot=300, seed=1, groups=groups)
+    lo_r, hi_r = row["per_label"]["needs_implant"]["auroc_ci"]
+    lo_p, hi_p = pat["per_label"]["needs_implant"]["auroc_ci"]
+    assert hi_p - lo_p > hi_r - lo_r

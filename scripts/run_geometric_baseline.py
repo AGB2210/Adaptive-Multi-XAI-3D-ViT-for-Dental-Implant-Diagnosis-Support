@@ -51,6 +51,8 @@ from src.xai.runner import load_case_set  # noqa: E402
 
 log = get_logger("geometric")
 
+NATIVE_SPACING_MM = 0.3   # ToothFairy3 is isotropic 0.3 mm; nothing is resampled
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -73,7 +75,20 @@ def main() -> None:
     if not mm_names:
         raise SystemExit("the config declares no millimetre targets to measure against")
 
-    spacing = tuple(float(v) for v in cfg.preprocess.spacing)
+    # `cfg.preprocess.spacing` does not exist in any config -- this line raised
+    # AttributeError on the exact invocation RUNBOOK 4e prescribes, so this
+    # baseline had never once run. The nearby `target_spacing` is the wrong
+    # substitute: it is null on sites.yaml (meaning "do not resample", i.e.
+    # native) and 1.0 on default.yaml, either of which would scale every
+    # millimetre this script reports by 3.33x and then compare it against a
+    # model whose millimetres are real.
+    target = getattr(cfg.preprocess, "target_spacing", None)
+    if target is None:
+        spacing = (NATIVE_SPACING_MM,) * 3          # nothing is resampled
+    else:
+        spacing = (float(target),) * 3
+    log.info("spacing %s mm/voxel -- every millimetre below depends on this",
+             spacing)
     name_index = {n: i for i, n in enumerate(cases.labels)}
     cpu = torch.device("cpu")
 

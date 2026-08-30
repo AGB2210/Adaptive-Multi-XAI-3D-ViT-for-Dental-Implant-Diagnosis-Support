@@ -11,6 +11,7 @@ import nibabel as nib
 import numpy as np
 
 from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
+from src.data.site_dataset import cut_patch, patch_centre
 from src.xai.site_masks import SITE_STRUCTURES, describe_coverage, patch_masks
 
 
@@ -90,3 +91,48 @@ class TestCoverage:
         path = write_mask(tmp_path, flipped=False)
         cov = describe_coverage(patch_masks(path, {**SITE, "site_z": 14.0}, patch_size=16))
         assert cov["nerve"] < 0.2
+
+
+# --- The mask box must BE the model's box, not a second guess at it -----------
+#
+# `patch_centre` pushes the input box a quarter of a patch toward the structure
+# that decides the answer -- 24 voxels at patch_size 96, which is 7.2 mm at
+# 0.3 mm. `patch_masks` used to build its own centre from raw `site_z`, so it
+# honoured the z flip but not the shift, and every localisation number was
+# scored against anatomy 7.2 mm from where the model was looking. Every test
+# above this line passed throughout, because they call `patch_masks` with a
+# hand-made row and never compare it against the model's own path.
+
+
+class TestTheMaskBoxIsTheModelsBox:
+    def test_the_crop_matches_patch_centre_voxel_for_voxel(self, tmp_path):
+        path = write_mask(tmp_path, flipped=False)
+        # site_z must sit where the structure actually is. At z=30 the nerve
+        # falls outside BOTH the shifted and unshifted boxes, so the comparison
+        # would be all-False against all-False and would pass either way.
+        row = {**SITE, "site_z": 14.0, "jaw": "lower"}
+        patch_size = 16
+
+        got = patch_masks(path, row, patch_size, {"nerve": IAC})["nerve"]
+        assert got.any(), "phantom mis-sited: the test proves nothing on an empty mask"
+
+        volume = np.asarray(nib.load(str(path)).dataobj)
+        centre = patch_centre(row, volume.shape, patch_size)
+        want = cut_patch(np.isin(volume, IAC).astype(np.uint8),
+                         centre, patch_size).astype(bool)
+
+        assert np.array_equal(got, want), (
+            "the mask crop drifted from patch_centre -- a second implementation "
+            "of the crop is exactly what went wrong")
+
+    def test_the_jaw_shift_reaches_the_mask(self, tmp_path):
+        """Guard the guard: if the shift were ignored these would be identical."""
+        path = write_mask(tmp_path, flipped=False)
+        lower = {**SITE, "site_z": 30.0, "jaw": "lower"}
+        upper = {**SITE, "site_z": 30.0, "jaw": "upper"}
+
+        got_lower = patch_masks(path, lower, 16, {"bone": (LOWER_JAW, UPPER_JAW)})["bone"]
+        got_upper = patch_masks(path, upper, 16, {"bone": (LOWER_JAW, UPPER_JAW)})["bone"]
+
+        assert not np.array_equal(got_lower, got_upper), (
+            "jaw is not reaching patch_centre -- the quarter-shift is ignored")

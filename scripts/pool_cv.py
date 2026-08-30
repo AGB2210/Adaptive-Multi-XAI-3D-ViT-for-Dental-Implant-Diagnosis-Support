@@ -54,6 +54,7 @@ from src.xai.runner import (  # noqa: E402
     SITE_SEP,
     load_case_set,
     model_img_size,
+    patients_of,
     predict_case_logits,
 )
 
@@ -217,8 +218,14 @@ def main() -> None:
     log.info("wrote %s", pred_csv)
 
     binary_names = labels[:n_bin]
+    # Cluster the interval on PATIENTS. A pooled row is a site, and 6,787 sites
+    # come from 486 patients, so resampling rows would treat fourteen views of
+    # one jaw as fourteen independent draws and return an interval far narrower
+    # than the data supports. `bootstrap_ci` used to do exactly that while its
+    # docstring said otherwise.
     pooled = evaluate(y_true[:, :n_bin], y_prob[:, :n_bin], binary_names,
-                      n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+                      n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci,
+                      groups=np.asarray(patients_of(pooled_ids)))
 
     # F1 is recomputed from each fold's own thresholds rather than retuned on the
     # pooled set, so it stays comparable with the per-round numbers.

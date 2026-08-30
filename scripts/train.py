@@ -99,8 +99,14 @@ def build_cv_folds(cfg, patient_ids, y, label_names, n_folds: int, force: bool =
         log.info("reusing %d-fold partition from %s", len(folds), path)
     else:
         folds = make_cv_folds(patient_ids, y, n_folds=n_folds, seed=cfg.split.seed)
+        # `patient_ids` comes from `patient_label_matrix`, which groups by
+        # patient, so its length is a patient count. Recording it as `n_cases`
+        # read as the site count (486 against ~6,787) to anyone sizing the
+        # cohort from this file, and was right only while the superseded task
+        # had one case per patient.
         save_folds(folds, path, meta={"seed": cfg.split.seed, "n_folds": n_folds,
-                                      "labels": label_names, "n_cases": len(patient_ids)})
+                                      "labels": label_names,
+                                      "n_patients": len(patient_ids)})
         log.info("wrote %d-fold partition to %s", n_folds, path)
 
     check_folds_disjoint(folds)
@@ -419,9 +425,30 @@ def main() -> None:
         out, y = predict(trainer.model, loaders[split], device, trainer.amp, spec=spec)
         res = {}
         if n_bin:
+            # On the site task one patient contributes up to fourteen rows, so
+            # the interval is clustered on patients. Passing None here would
+            # resample rows and understate every interval -- which is what this
+            # call did until v3.4.0.
+            ds = loaders[split].dataset
+            if getattr(ds, "sites", None) is not None:
+                # Site task: one row per tooth position, several per patient.
+                groups = ds.sites["patient_id"].to_numpy()
+            elif isinstance(ds, TensorDataset) or getattr(ds, "patient_ids", None) is not None:
+                # One row per independent unit already: the whole-volume task,
+                # and synthetic data where every sample is drawn on its own.
+                groups = None
+            else:
+                raise AttributeError(
+                    f"{type(ds).__name__} exposes neither `sites` nor `patient_ids`, "
+                    "so the bootstrap cannot tell which rows share a patient. Say "
+                    "which explicitly rather than letting it default to a row "
+                    "bootstrap -- that silent default is what understated every "
+                    "interval before v3.4.0."
+                )
             res["classification"] = evaluate(
                 y[:, :n_bin], out[:, :n_bin], binary_names,
-                n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci)
+                n_boot=cfg.eval.bootstrap_n, ci=cfg.eval.bootstrap_ci,
+                groups=groups)
         if mm_names:
             res["regression"] = regression_metrics(y[:, n_bin:], out[:, n_bin:], mm_names)
             # Feasibility is recovered HERE, from configuration, across a sweep

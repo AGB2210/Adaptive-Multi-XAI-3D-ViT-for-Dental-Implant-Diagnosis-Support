@@ -271,15 +271,31 @@ def derived_feasible(pred_mm: np.ndarray, names: list[str], rules: dict,
     inference, from configuration -- so revising a threshold is a re-score rather
     than a retrain. Any threshold can be passed, including ones the model never
     saw, which is what makes the sensitivity analysis possible at all.
+
+    AN UNMEASURABLE SITE RETURNS NaN, NOT ZERO. `nan >= 12.0` is `False`, so a
+    measurement that could not be made used to come out of here as a confident
+    "not feasible". Two consequences, and the second is worse than the first: an
+    infeasible rate computed over failures, and -- when truth and prediction were
+    both unmeasurable -- two failures counted as an agreement. The geometric
+    baseline returns NaN for about 20% of sites on purpose, and
+    `run_geometric_baseline.py` prints that count immediately before feeding the
+    same array to `threshold_sensitivity`, which silently disagreed with it.
     """
     idx = {n: i for i, n in enumerate(names)}
     ok = np.ones(len(pred_mm), dtype=bool)
+    usable = np.ones(len(pred_mm), dtype=bool)
     height_rule = ("min_height_mandible_mm" if jaw == "lower" else "min_height_maxilla_mm")
     if "available_height_mm" in idx and height_rule in rules:
-        ok &= pred_mm[:, idx["available_height_mm"]] >= float(rules[height_rule])
+        col = pred_mm[:, idx["available_height_mm"]]
+        ok &= col >= float(rules[height_rule])
+        usable &= np.isfinite(col)
     if "ridge_width_mm" in idx and "min_width_mm" in rules:
-        ok &= pred_mm[:, idx["ridge_width_mm"]] >= float(rules["min_width_mm"])
-    return ok.astype(np.float32)
+        col = pred_mm[:, idx["ridge_width_mm"]]
+        ok &= col >= float(rules["min_width_mm"])
+        usable &= np.isfinite(col)
+    out = ok.astype(np.float32)
+    out[~usable] = np.nan
+    return out
 
 
 def threshold_sensitivity(true_mm: np.ndarray, pred_mm: np.ndarray, names: list[str],
@@ -290,6 +306,10 @@ def threshold_sensitivity(true_mm: np.ndarray, pred_mm: np.ndarray, names: list[
     Report this instead of a single number. It is strictly more informative than
     any one threshold, and it is only possible because the model predicts
     millimetres -- which is the argument for doing so, made visible.
+
+    `n` is the number of sites on which BOTH sides could be measured, and it can
+    be well below `len(true_mm)` for an estimator that declines to answer. Quote
+    it beside the agreement or the comparison is not like for like.
     """
     rows = []
     key = "min_height_mandible_mm" if jaw == "lower" else "min_height_maxilla_mm"
