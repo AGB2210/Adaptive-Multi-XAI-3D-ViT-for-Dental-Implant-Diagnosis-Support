@@ -3,9 +3,18 @@
     python scripts/evaluate.py --checkpoint artifacts/runs/vit3d/best.pt
     python scripts/evaluate.py --checkpoint ... --external      # add the external cohort
 
-The external cohort is never trained on:
-evaluated on Italian cohorts (0.175-0.3 mm, different scanners). It is never
-trained on. impacted_tooth is excluded -- the reports have no reliable equivalent.
+`--external` scores a second cohort zero-shot, once, at the very end. A model can
+look good on one hospital's scanner by learning its noise and field of view, and
+that is the check it did not.
+
+NO CONFIG CURRENTLY DECLARES ONE. `data.external` is commented out in
+default.yaml, so this path does not run, and `external_dataset` returns None.
+The paragraph that used to sit here described a cohort pairing that no longer
+exists -- it named a scanner range and an `impacted_tooth` label that appears
+nowhere else in the repository, and it had lost the subject of its own first
+sentence. It is replaced rather than repaired, because a stale description of a
+dead path is worse than no description: it reads as a study design that was
+carried out.
 """
 
 from __future__ import annotations
@@ -36,6 +45,7 @@ from src.train.targets import (  # noqa: E402
     TargetSpec,
     format_regression,
     regression_metrics,
+    to_report_units,
 )
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
 from src.utils.log import get_logger  # noqa: E402
@@ -106,12 +116,17 @@ def main() -> None:
     # prediction to 1.0 and every metric downstream becomes a statement about a
     # constant. The millimetre block is un-standardised instead, using the
     # scaler that travelled in the checkpoint.
+    #
+    # This was written out by hand here, correctly, before `to_report_units`
+    # existed -- and that function's whole purpose is to be the ONE place the
+    # conversion lives, because the same two-line mistake was made independently
+    # in three other scripts. A correct second copy is still a second copy: it
+    # is the shape that put the anatomy masks 7.2 mm from the model's input, and
+    # it does not carry `to_report_units`'s guards for a non-finite temperature
+    # or a pre-hybrid checkpoint. Verified identical to 3e-08 before switching.
     spec = TargetSpec.from_state(ckpt.get("target_spec"))
     n_bin = len(label_names_for(cfg))
-    probs = np.array(logits, dtype=np.float64, copy=True)
-    probs[:, :n_bin] = 1.0 / (1.0 + np.exp(-logits[:, :n_bin]))
-    if spec.is_hybrid:
-        probs = spec.to_millimetres(probs.astype(np.float32)).astype(np.float64)
+    probs = to_report_units(np.asarray(logits, dtype=np.float32), spec).astype(np.float64)
 
     # Thresholds come from validation, never from the split being reported.
     val_metrics_path = Path(args.checkpoint).parent / "best_val_metrics.json"

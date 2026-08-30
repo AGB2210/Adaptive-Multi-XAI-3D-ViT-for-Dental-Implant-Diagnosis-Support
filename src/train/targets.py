@@ -167,14 +167,17 @@ def to_report_units(out: np.ndarray, spec: TargetSpec, temperature: float = 1.0)
 
     This is one function because the same two-line mistake was made
     independently in three scripts: `sigmoid` applied to the whole output row.
-    On a millimetre head that is not a rounding error. `scripts/evaluate.py`
-    was corrected when the hybrid head landed and carries the comment
-    explaining why; `pool_cv.py`, `run_adaptive.py` and `make_figures.py` were
-    not, so the POOLED millimetre metrics -- the project's headline regression
-    numbers -- were computed on sigmoid(standardised mm), a quantity in (0, 1),
-    scored against a truth in millimetres. The calibration fit was handed
-    millimetres as if they were binary labels, which is what drove the
-    temperature to NaN.
+    On a millimetre head that is not a rounding error. `pool_cv.py`,
+    `run_adaptive.py` and `make_figures.py` all made it, so the POOLED
+    millimetre metrics -- the project's headline regression numbers -- were
+    computed on sigmoid(standardised mm), a quantity in (0, 1), scored against a
+    truth in millimetres. The calibration fit was handed millimetres as if they
+    were binary labels, which is what drove the temperature to NaN.
+
+    `scripts/evaluate.py` got it right on its own when the hybrid head landed,
+    and then kept its own copy of the conversion for two releases while this
+    docstring said "call this instead". A correct second copy is still a second
+    copy. It now calls this.
 
     Call this instead of sigmoiding a row of model outputs. On the hybrid task
     there is no case where sigmoiding the whole row is right.
