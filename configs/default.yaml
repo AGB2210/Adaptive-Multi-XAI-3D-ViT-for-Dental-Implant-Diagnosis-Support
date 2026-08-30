@@ -4,9 +4,10 @@
 # <NAME>_ROOT env vars -- TOOTHFAIRY3_ROOT for the dataset named toothfairy3 --
 # which always win over the values here. Never commit a real path.
 #
-# NOT YET FILLED IN: task.labels and the ToothFairy3 layout. Both wait on the
-# download, because guessing the class indices would produce a config that looks
-# right and trains against the wrong columns.
+# task.labels and the ToothFairy3 layout are filled in below, read off the
+# cohort's own dataset.json rather than guessed -- an index wrong by one trains
+# against a different anatomical structure while every metric still looks
+# reasonable.
 
 seed: 1337
 
@@ -29,11 +30,10 @@ task:
   # A case is positive for a class when that class occupies at least min_voxels
   # in its mask. scripts/build_labels.py turns that into artifacts/labels_*.csv.
   #
-  # EMPTY ON PURPOSE. The class indices must be read off ToothFairy3's own class
-  # list, not guessed: an index wrong by one trains the model against a different
-  # anatomical structure, and every metric downstream still looks reasonable.
-  # Read from ToothFairy3's own dataset.json, not guessed: 78 classes, of which
-  # Bridge=8, Crown=9, Implant=10.
+  # Read from ToothFairy3's own dataset.json, never guessed: 78 classes, of
+  # which Bridge=8, Crown=9, Implant=10. An index wrong by one would train the
+  # model against a different anatomical structure and every metric downstream
+  # would still look reasonable.
   labels: [implant, crown, bridge]
   class_indices: {implant: 10, crown: 9, bridge: 8}
   #
