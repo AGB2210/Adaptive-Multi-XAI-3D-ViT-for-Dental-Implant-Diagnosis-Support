@@ -189,9 +189,16 @@ outputs live on the box that produced them.
 
 So read this section as two different things depending on who you are. **If you
 are reproducing the run**, everything below still applies exactly as written.
-**If you are adding to it, nothing here needs a GPU.** The two outstanding items
-are the CPU-only runs in §4e, and the ceiling control among them is the last
-missing denominator for every enrichment figure.
+**If you are adding to it, nothing here needs a GPU**, and one item comes before
+all the others:
+
+| | |
+|---|---|
+| **Re-run localisation** | The anatomy masks were cut **7.2 mm** from the box the model was actually shown, so every existing localisation figure is withdrawn. `patch_masks` built its own patch centre and missed the quarter-shift `patch_centre` applies. Fixed in v3.4.0; CPU-only, no retraining. `REPORT.md` §C8k.1 |
+| The two CPU-only runs in §4e | The ceiling control is the last missing denominator for every enrichment figure; the geometric baseline has still never run on real scans |
+
+Randomisation and faithfulness never open a mask, so those results are
+unaffected and do not need re-running for this.
 
 
 ### 4a. Measure every site — about 30 min, CPU only
