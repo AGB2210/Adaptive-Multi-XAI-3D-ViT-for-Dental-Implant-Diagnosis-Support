@@ -38,6 +38,8 @@ import nibabel as nib
 import numpy as np
 from scipy import ndimage
 
+from src.models.geometric import otsu as _otsu
+
 # Both datasets are HU-calibrated with the air peak at exactly -1000.
 DEFAULT_AIR_THRESHOLD = -500.0
 # Volumes whose minimum sits above this are not HU-like; fall back to Otsu.
@@ -84,23 +86,24 @@ def spacing_from_affine(affine: np.ndarray) -> np.ndarray:
 
 
 def otsu_threshold(values: np.ndarray, bins: int = 256) -> float:
-    """Plain Otsu on a histogram -- used only when a volume is not HU-calibrated."""
-    values = values[np.isfinite(values)]
-    hist, edges = np.histogram(values, bins=bins)
-    centres = (edges[:-1] + edges[1:]) / 2.0
-    w = hist.astype(np.float64)
-    total = w.sum()
-    if total == 0:
-        return float(values.min() if values.size else 0.0)
-    w0 = np.cumsum(w)
-    w1 = total - w0
-    s = np.cumsum(w * centres)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        m0 = s / w0
-        m1 = (s[-1] - s) / w1
-        between = w0 * w1 * (m0 - m1) ** 2
-    between[~np.isfinite(between)] = -np.inf
-    return float(centres[int(np.argmax(between))])
+    """Otsu threshold -- delegates to the ONE implementation, in `models.geometric`.
+
+    This file used to carry a second copy. Both used the correct between-class
+    variance, but only the other one handles the case where the maximum is a
+    PLATEAU: two well-separated peaks leave an empty gap, every threshold inside
+    it scores identically, and `argmax` then returns the gap's left edge, hard
+    against the darker peak. On the phantom named in that docstring -- peaks at
+    -1 and +1, where the answer is 0.0 -- this copy returned -0.8387 while the
+    other returned -0.0197.
+
+    So the copy is deleted rather than repaired. Two implementations of one
+    thing is what put the anatomy masks 7.2 mm from the model's input (C8k.1),
+    and a bug fixed in one of them is not fixed.
+
+    `bins` is kept in the signature for callers; the shared implementation
+    defaults lower, and the value is passed through.
+    """
+    return _otsu(values, bins=bins)
 
 
 def foreground_bbox(

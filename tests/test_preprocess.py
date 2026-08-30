@@ -210,3 +210,36 @@ def test_clip_mode_rejects_unknown_values():
     assert arr is None
     assert info.status == "failed"
     assert "clip_mode" in info.warning
+
+
+# --- One Otsu, not two --------------------------------------------------------
+#
+# preprocess.py carried its own copy. Both used the correct between-class
+# variance, but only geometric.otsu handles a PLATEAU maximum: two
+# well-separated peaks leave an empty gap, every threshold inside it scores
+# identically, and argmax returns the gap's left edge, hard against the darker
+# peak. On peaks at -1 and +1 the copy returned -0.8387 where the answer is 0.0.
+#
+# Two implementations of one thing is what put the anatomy masks 7.2 mm from the
+# model's input, so the copy was deleted rather than repaired.
+
+
+def test_otsu_threshold_is_the_shared_implementation():
+    from src.data.preprocess import otsu_threshold
+    from src.models.geometric import otsu
+
+    rng = np.random.default_rng(0)
+    values = np.concatenate([rng.normal(-1.0, 0.05, 5000),
+                             rng.normal(+1.0, 0.05, 5000)])
+    assert otsu_threshold(values) == pytest.approx(otsu(values, bins=256), abs=1e-9)
+
+
+def test_otsu_lands_between_two_separated_peaks_not_against_one():
+    """The plateau case. argmax alone returned -0.84 here."""
+    from src.data.preprocess import otsu_threshold
+
+    rng = np.random.default_rng(0)
+    values = np.concatenate([rng.normal(-1.0, 0.05, 5000),
+                             rng.normal(+1.0, 0.05, 5000)])
+    assert abs(otsu_threshold(values)) < 0.2, (
+        "the threshold sits against a peak instead of in the gap between them")
