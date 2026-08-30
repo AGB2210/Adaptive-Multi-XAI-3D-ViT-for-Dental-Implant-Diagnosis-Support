@@ -481,6 +481,16 @@ settings are visible -- the default and the `--baseline mean --score deviation`
 diagnosis. The settings are in every row, but a filename that says so saves the
 person reading them from having to check.
 
+**Check that `patient_id` holds a patient before sending.** It should read
+`ToothFairy3F_011`, never `ToothFairy3F_011#45` -- the site id belongs in
+`case_id`, which is now written beside it. Files produced before v3.3.0 have the
+case id in both columns, which silently turned the patient-clustered bootstrap
+into a row bootstrap and cost a published claim. `REPORT.md` C8j has the story.
+
+```bash
+head -2 artifacts_sites/results_randomization.csv
+```
+
 A few hundred MB in total. **Leave the `.pt` checkpoints and `cache/` behind**
 unless asked — they are many gigabytes, and both are reproducible from the
 files above.
