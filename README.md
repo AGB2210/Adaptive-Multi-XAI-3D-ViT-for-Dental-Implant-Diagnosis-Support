@@ -36,9 +36,17 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done** — scores against the nerve canal |
-| Training on the site task | **Fold 0 done** on a rented RTX 4090. Folds 1–4 not run, so there is no pooled or test-set result |
-| Baselines | CNN written, never trained. Geometric estimator written, never run on real scans — it is the one that can end the architecture argument |
+| Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.954 [0.944, 0.963] over 6,787 sites, each scored once by the model that never saw it |
+| Baselines | **CNN trained on fold 0, and it beats the ViT on every measure with 2.8x fewer parameters.** Its folds 1–4 are not run, so nothing from it is cross-validated yet. The geometric estimator is written and never run on real scans |
 | Guide sign-off on clinical thresholds | **Pending** |
+
+**The headline result is a negative one, and it is stated here rather than
+buried.** Feasibility agreement is 0.66–0.71 across all five folds, biased
+toward calling sites feasible that are not — the unsafe direction beside a
+nerve. Mean absolute error is 3.4 mm against a rule whose entire safety margin
+is 2 mm, so this is arithmetic rather than an unlucky split. **What is
+defensible is a screening aid that flags sites for human review, not a decision
+tool.**
 
 Both pipelines now produce a `CaseSet` (`src/xai/runner.py`), so the five XAI
 scripts no longer care which task they are on: a case is a whole scan or a

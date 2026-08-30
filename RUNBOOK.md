@@ -181,6 +181,24 @@ later be mistaken for results.
 
 ## 4. The real run
 
+**Most of this has already been run once.** All five folds are trained and
+pooled, the XAI suite is complete with patient-clustered intervals, the
+faithfulness diagnosis has been done with `--baseline mean --score deviation`,
+and a CNN baseline exists for fold 0. That run cost about ₹455 and its outputs
+live on the box that produced them.
+
+So read this section as two different things depending on who you are. **If you
+are reproducing the run**, everything below still applies exactly as written.
+**If you are adding to it**, only three things are outstanding, and only the
+first costs GPU time:
+
+| | |
+|---|---|
+| CNN folds 1-4, then pool | ~₹200. One fold is not a result, and this is the run that decides whether the transformer was worth using |
+| XAI re-run on the CNN checkpoint | Same commands as §4d, different `--checkpoint`. It answers whether Integrated Gradients still fails randomisation on a different backbone |
+| The two CPU-only runs in §4e | Free. The ceiling control is the last missing denominator for every enrichment figure |
+
+
 ### 4a. Measure every site — about 30 min, CPU only
 
 ```bash
@@ -277,6 +295,12 @@ Then pool them, so every case is predicted once by a model that never saw it:
 python scripts/pool_cv.py --config configs/sites.yaml --folds 5
 ```
 
+**Train the CNN baseline the same way**, with `--model cnn3d`. Fold 0 exists and
+it beat the ViT on every measure with 2.8x fewer parameters, so folds 1-4 are
+not optional politeness toward a baseline — they decide which model the paper is
+about. Run all five and pool them exactly as above; a single fold's validation
+split cannot be compared against a pooled five-fold number.
+
 ### 4d. Explainability
 
 Sample sizes come from the `xai:` block in `configs/sites.yaml` — 200 cases, 200
@@ -290,19 +314,23 @@ scale, so 200 cases is ~2.6 h on CPU and considerably less on the GPU. Every
 script now logs `N/M cases done` with a per-case time, so you can extrapolate
 after the first case rather than guessing.
 
-**One extra thing to run while you are here.** The model-randomisation table in
-`REPORT.md` §C9 has been measured on the real model with the rebuild fix in
-place, so nothing in it is provisional any more. What it still lacks is
-intervals: `--only-randomization` re-runs the cascade alone and the report now
-prints a patient-clustered interval per method, which is what turns the ordering
-from nominal into supported.
+**The randomisation table is settled.** `REPORT.md` §C9 has it measured on the
+real model with the rebuild fix in place, and it now carries a patient-clustered
+interval per method. **No two intervals overlap**, so the ordering is supported
+by the data rather than nominal — which was the open question this step existed
+to close.
+
+`--only-randomization` re-runs the cascade alone, about an hour, and is still
+the right command if you are reproducing or running it against a different
+checkpoint:
 
 ```bash
 python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --only-randomization
 ```
 
-About an hour. Send the result back with everything else — it decides whether a
-headline claim in the paper stands as written.
+Run it on the CNN checkpoint when that exists. Whether Integrated Gradients
+still changes least under randomisation on a different backbone is the most
+interesting unanswered question in the project.
 
 All five use fold 0's checkpoint.
 
