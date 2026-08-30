@@ -14,7 +14,13 @@ For each tooth position in the lower jaw:
 | | |
 |---|---|
 | **needs_implant** | nothing occupies this position — no tooth, no crown, no bridge pontic, no existing implant |
-| **feasible** | there is enough bone to place one safely, clear of the inferior alveolar nerve |
+| **available_height_mm** | how much bone there is, crest of the ridge down to the inferior alveolar canal |
+| **ridge_width_mm** | how wide the ridge is below the crest |
+
+Feasibility — *is there enough bone to place an implant safely, clear of the
+nerve* — is **not** one of these. It is a rule applied to the two millimetre
+outputs at inference, so a revised clinical threshold is a re-score rather than a
+retrain. See "`feasible` is not a label" below.
 
 Labels are derived geometrically from ToothFairy3's own voxel masks. Every row
 stores the measured millimetres beside the verdict, so revising a clinical
@@ -108,7 +114,7 @@ upper tooth is lost the ridge resorbs, the sinus pneumatises, and ToothFairy3's
 annotation gap as a clinical verdict.
 
 Nothing important is lost: the inferior alveolar canal is annotated in **every**
-scan, and nerve clearance limits 408 of the 478 infeasible sites — which is both
+scan, and nerve clearance limits 376 of the 413 infeasible sites — which is both
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
 
@@ -319,19 +325,19 @@ sign-off** — the project guide reviews them before publication.
 
 ## The finding that survives the pivot
 
-A corrected model-randomisation check (Adebayo et al. 2018), destroying 100% of
-9.15M parameters across 12 stages:
+A model-randomisation check (Adebayo et al. 2018) destroys the network stage by
+stage and measures how much each explanation changes. A faithful map must
+decorrelate; **Integrated Gradients changes least, and is therefore the least
+faithful method here.** It produces nearly the same map from a trained network
+and a randomised one, which is a property of the method rather than of the task.
 
-| method | Spearman vs intact map, fully randomised |
-|---|---|
-| **gradcam** | **0.28** — the only method that passes |
-| attention_rollout | 0.62 |
-| gradient_shap | 0.71 |
-| **integrated_gradients** | **0.94** — essentially unchanged |
-
-Integrated Gradients produces almost the same map from a trained network and a
-random one. It is an edge detector on this data. This is a property of the
-method, not of the task, and it holds regardless of which labels are used.
+**No table of values is published here on purpose.** An earlier version of this
+section carried per-method numbers measured on the Part B *detection* model,
+before a fault in the cascade's rebuild path was fixed. They described a
+different network on a different task, and their ordering was not merely stale
+but reversed. The current values belong to the site model and are reported with
+their patient-clustered intervals in `RESULTS.md` §5 and `REPORT.md` §C9 — the
+two documents that also carry the caveats they must be read with.
 
 ## Known limitation
 
