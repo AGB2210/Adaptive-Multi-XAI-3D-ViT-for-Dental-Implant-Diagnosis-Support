@@ -1,11 +1,19 @@
 """3D Vision Transformer, written from scratch. No MONAI, no timm, no pretrained weights.
 
-    input (B, 1, 128, 128, 128)
-      -> conv stem: 2 residual blocks, stride 2 overall   -> (B, C, 64, 64, 64)
-      -> patch embed Conv3d(kernel=8, stride=8)           -> 8x8x8 = 512 tokens
+As configured for the site task, `configs/sites.yaml`:
+
+    input (B, 1, 96, 96, 96)                              96 voxels = 28.8 mm
+      -> conv stem: 2 residual blocks, stride 2 overall   -> (B, C, 48, 48, 48)
+      -> patch embed Conv3d(kernel=4, stride=4)           -> 12x12x12 = 1,728 tokens
       -> prepend CLS + learnable positional embeddings
       -> N pre-norm encoder blocks (MHSA + MLP)
-      -> LayerNorm -> CLS -> Linear -> num_classes logits
+      -> LayerNorm -> CLS -> Linear -> num_outputs logits
+
+THE STEM'S STRIDE IS PART OF THE TOKEN SIZE. One token spans `2 * patch_size`
+INPUT voxels, so patch_size 4 gives 8 voxels = 2.4 mm at 0.3 mm. The defaults in
+`__init__` are the superseded 128^3 whole-volume settings, where patch_size 8
+gave 4.8 mm per token -- wider than the inferior alveolar canal the explanations
+exist to resolve. Read `model.grid_size` rather than recomputing it.
 
 Design notes:
   * Dense global attention, not windowed. Attention rollout has well-defined maths
@@ -180,7 +188,14 @@ class Block(nn.Module):
 
 
 class ViT3D(nn.Module):
-    """3D ViT classifier for patient-level multi-label prediction."""
+    """3D ViT trunk with a linear head over the CLS token.
+
+    "Classifier" only on the superseded whole-volume task. On the site task the
+    head is hybrid -- one binary output and two millimetre outputs -- and a
+    sample is a tooth position rather than a patient. The model itself does not
+    know the difference: it emits `num_classes` raw values and the loss decides
+    what they mean.
+    """
 
     def __init__(
         self,
