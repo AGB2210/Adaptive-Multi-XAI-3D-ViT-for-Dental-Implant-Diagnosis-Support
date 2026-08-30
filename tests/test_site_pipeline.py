@@ -153,6 +153,79 @@ class TestAttributionToScore:
             assert np.isfinite(out[key])
 
 
+class TestTheMaskSeamAndTheInputSeamAreTheSameSeam:
+    """The seam that broke, and that this file stopped one function short of.
+
+    Everything above scores a saliency map against a mask built BY HAND in the
+    test. That is what let `patch_masks` drift 7.2 mm from `CaseSet.load` and
+    stay there for three releases: the localisation unit tests were correct, the
+    pipeline test was correct, and neither one ever asked the two cropping paths
+    to agree.
+    """
+
+    def test_the_mask_patch_and_the_input_patch_cover_the_same_voxels(self, tmp_path):
+        import nibabel as nib
+
+        from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
+        from src.data.site_dataset import cut_patch, patch_centre
+        from src.xai.site_masks import patch_masks
+
+        # A mask with both jaws, so orientation resolves, and a marked slab.
+        m = np.zeros((60, 60, 60), dtype=np.int16)
+        m[10:50, 10:50, 5:20] = LOWER_JAW
+        m[10:50, 10:50, 45:55] = UPPER_JAW
+        m[28:32, 28:32, 12:16] = IAC[0]
+        path = tmp_path / "mask.nii.gz"
+        nib.save(nib.Nifti1Image(m, np.eye(4)), str(path))
+
+        row = {"site_x": 30.0, "site_y": 30.0, "site_z": 14.0, "jaw": "lower"}
+
+        got = patch_masks(path, row, PATCH, {"nerve": IAC})["nerve"]
+        assert got.any(), "phantom mis-sited: an empty mask proves nothing"
+
+        # The model's own path, applied to the same volume.
+        volume = np.asarray(nib.load(str(path)).dataobj)
+        centre = patch_centre(row, volume.shape, PATCH)
+        want = cut_patch(np.isin(volume, IAC).astype(np.uint8), centre, PATCH).astype(bool)
+
+        assert np.array_equal(got, want), (
+            "the mask crop and the input crop disagree -- a saliency map is being "
+            "scored against anatomy the model was not shown")
+
+    def test_the_seam_holds_for_both_jaws(self, tmp_path):
+        """`patch_centre` shifts DOWN for the mandible and UP for the maxilla.
+
+        A mask path that ignored `jaw` would agree with the input on one of them
+        and not the other, so testing a single jaw is not enough.
+        """
+        import nibabel as nib
+
+        from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
+        from src.data.site_dataset import cut_patch, patch_centre
+        from src.xai.site_masks import patch_masks
+
+        m = np.zeros((60, 60, 60), dtype=np.int16)
+        m[10:50, 10:50, 5:20] = LOWER_JAW
+        m[10:50, 10:50, 45:55] = UPPER_JAW
+        path = tmp_path / "mask.nii.gz"
+        nib.save(nib.Nifti1Image(m, np.eye(4)), str(path))
+
+        volume = np.asarray(nib.load(str(path)).dataobj)
+        bone = {"bone": (LOWER_JAW, UPPER_JAW)}
+        seen = []
+        for jaw in ("lower", "upper"):
+            row = {"site_x": 30.0, "site_y": 30.0, "site_z": 30.0, "jaw": jaw}
+            got = patch_masks(path, row, PATCH, bone)["bone"]
+            centre = patch_centre(row, volume.shape, PATCH)
+            want = cut_patch(np.isin(volume, (LOWER_JAW, UPPER_JAW)).astype(np.uint8),
+                             centre, PATCH).astype(bool)
+            assert np.array_equal(got, want), f"{jaw}: mask crop disagrees with input crop"
+            seen.append(got)
+
+        assert not np.array_equal(seen[0], seen[1]), (
+            "both jaws produced the same mask -- `jaw` is not reaching patch_centre")
+
+
 class TestConfigsAgreeWithTheCode:
     def test_the_site_config_resolves_end_to_end(self):
         """Catches the class of bug where a config overrides one path and
