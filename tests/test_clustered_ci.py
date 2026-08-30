@@ -9,10 +9,12 @@ having done so.
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 import pandas as pd
 
-from src.xai.runner import ci_table, clustered_ci
+from src.xai.runner import ci_table, clustered_ci, patients_of
 
 
 def sites(n_patients=20, per_patient=14, spread=1.0, within=0.05, seed=0):
@@ -112,3 +114,59 @@ class TestCiTable:
         assert (table["n"] == 12 * 14).all()
         assert (table["ci_lo"] <= table["value"]).all()
         assert (table["value"] <= table["ci_hi"]).all()
+
+
+class TestACaseIdIsNotAPatientId(unittest.TestCase):
+    """The bootstrap was defeated once by a column NAME, not by its maths.
+
+    `run_faithfulness.py` wrote `patient#tooth` into a column called
+    `patient_id`. Every group then held one row, so the clustered bootstrap was
+    a row bootstrap, and nothing in the output said so -- the tables were
+    printed under the heading "patient-clustered" for two releases. Recomputing
+    the published intervals from the CSVs is what found it: 30 randomisation
+    cases came from 14 patients.
+    """
+
+    def _frame(self, ids):
+        return pd.DataFrame({
+            "patient_id": ids,
+            "method": ["gradcam"] * len(ids),
+            "value": np.linspace(0.0, 1.0, len(ids)),
+        })
+
+    def test_case_ids_are_refused(self):
+        frame = self._frame([f"P{i // 3:03d}#{30 + i % 3}" for i in range(12)])
+        with self.assertRaises(ValueError) as caught:
+            clustered_ci(frame, "value")
+        message = str(caught.exception)
+        self.assertIn("case ids", message)
+        self.assertIn("patients_of", message)
+
+    def test_patients_of_makes_the_same_frame_acceptable(self):
+        ids = [f"P{i // 3:03d}#{30 + i % 3}" for i in range(12)]
+        frame = self._frame(ids)
+        frame["patient_id"] = patients_of(ids)
+        point, lo, hi = clustered_ci(frame, "value")
+        self.assertTrue(np.isfinite([point, lo, hi]).all())
+        self.assertLessEqual(lo, point)
+        self.assertLessEqual(point, hi)
+
+    def test_row_resampling_would_have_been_narrower(self):
+        """The size of what was understated, measured rather than asserted."""
+        ids = [f"P{i // 4:03d}#{30 + i % 4}" for i in range(40)]
+        rng = np.random.default_rng(0)
+        # Sites within a patient agree with each other -- that is the whole
+        # reason the rows are not independent draws.
+        per_patient = {p: rng.normal() for p in set(patients_of(ids))}
+        value = [per_patient[p] + 0.05 * rng.normal() for p in patients_of(ids)]
+
+        by_patient = pd.DataFrame({"patient_id": patients_of(ids), "value": value})
+        # What the broken column produced: one group per row, under a name that
+        # said otherwise.
+        by_row = pd.DataFrame({"patient_id": [f"row{i}" for i in range(len(ids))],
+                               "value": value})
+
+        _, lo_p, hi_p = clustered_ci(by_patient, "value")
+        _, lo_r, hi_r = clustered_ci(by_row, "value")
+        self.assertGreater(hi_p - lo_p, hi_r - lo_r,
+                           "resampling rows must understate the interval")

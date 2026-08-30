@@ -309,15 +309,19 @@ scale, so 200 cases is ~2.6 h on CPU and considerably less on the GPU. Every
 script now logs `N/M cases done` with a per-case time, so you can extrapolate
 after the first case rather than guessing.
 
-**The randomisation table is settled.** `REPORT.md` §C9 has it measured on the
-real model with the rebuild fix in place, and it now carries a patient-clustered
-interval per method. **No two intervals overlap**, so the ordering is supported
-by the data rather than nominal — which was the open question this step existed
-to close.
+**Re-run this one even if nothing else needs re-running.** `REPORT.md` §C9 is
+measured on the real model with the rebuild fix in place, but the CSV it came
+from wrote **case** ids into a column named `patient_id`, so the
+"patient-clustered" bootstrap was a row bootstrap — 30 randomisation cases from
+14 patients, all counted as 30 independent draws. §C8j has the whole story.
 
-`--only-randomization` re-runs the cascade alone, about an hour, and is still
-the right command if you are reproducing or running it against a different
-checkpoint:
+The fix is in `run_faithfulness.py`, which now writes `case_id` and a real
+`patient_id`, and `clustered_ci` refuses a grouping column that carries case
+ids. **The intervals in §C9 were recomputed by splitting the case id**, which is
+correct but is not the same as the pipeline producing them. This re-run makes
+the file match the claim.
+
+`--only-randomization` re-runs the cascade alone, about an hour:
 
 ```bash
 python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --only-randomization

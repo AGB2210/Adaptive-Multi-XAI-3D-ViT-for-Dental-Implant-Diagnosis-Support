@@ -421,8 +421,19 @@ def clustered_ci(frame, value_col: str, patient_col: str = "patient_id",
     certain than the data supports while nothing on the page says so.
 
     It is the same fault as `ids[:n]` in `select_cases`, one level up: there the
-    sample was not a sample, here the resample is not a resample. `patients_of`
-    was written for this and went unused for two releases.
+    sample was not a sample, here the resample is not a resample.
+
+    The failure this guards against has already happened once, and the warning
+    above did not prevent it. `run_faithfulness.py` wrote CASE ids -- `p#tooth`
+    -- into a column it named `patient_id`, so every group here held exactly one
+    row, the "patient-clustered" bootstrap was a row bootstrap, and the printed
+    tables said "patient-clustered" throughout. It was caught only by
+    recomputing the published intervals from the CSVs, where 30 randomisation
+    cases turned out to come from 14 patients.
+
+    So the column is checked rather than trusted. A value carrying `SITE_SEP` is
+    a case id, and clustering on case ids is the exact error this function
+    exists to prevent -- pass `patients_of(...)` or a real patient column.
 
     `stat` is applied to the pooled values of the resampled patients, so a
     patient with more sites carries more weight -- which is the right thing when
@@ -431,6 +442,17 @@ def clustered_ci(frame, value_col: str, patient_col: str = "patient_id",
     Returns NaN when nothing finite survives. Callers must not turn that into a
     zero: no interval and an interval of zero width are opposite claims.
     """
+    keys = frame[patient_col].astype(str)
+    if keys.str.contains(SITE_SEP, regex=False).any():
+        offenders = sorted(keys[keys.str.contains(SITE_SEP, regex=False)].unique())[:3]
+        raise ValueError(
+            f"{patient_col!r} holds case ids, not patient ids -- e.g. {offenders}. "
+            f"Clustering on these resamples rows, not patients, and narrows every "
+            f"interval by about sqrt(sites per patient) while the output still "
+            f"reads 'patient-clustered'. Pass patients_of(ids) or a real patient "
+            f"column."
+        )
+
     groups = [g[value_col].to_numpy(dtype=float) for _, g in frame.groupby(patient_col)]
     groups = [g[np.isfinite(g)] for g in groups]
     groups = [g for g in groups if g.size]

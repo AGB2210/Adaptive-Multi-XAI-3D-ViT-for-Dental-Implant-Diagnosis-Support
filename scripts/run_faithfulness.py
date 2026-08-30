@@ -173,7 +173,13 @@ def main() -> None:
 
             rows.append({
                 "dataset": dataset,
-                "patient_id": pid,
+                # `pid` is a case id -- `patient#tooth` on the site task. Writing
+                # it into a column named `patient_id` is what defeated the
+                # clustered bootstrap: `clustered_ci` resampled distinct values
+                # of `patient_id`, found one per row, and produced a row
+                # bootstrap while every printed table said "patient-clustered".
+                "case_id": pid,
+                "patient_id": cases.patient_of(pid),
                 "target_label": label_names[target] if target < len(label_names) else target,
                 # In the target's own unit -- a probability for the binary
                 # block, millimetres for the millimetre block. `int()` on the
@@ -202,7 +208,8 @@ def main() -> None:
             if a == b:
                 continue
             agreement_rows.append({
-                "dataset": dataset, "patient_id": pid,
+                "dataset": dataset,
+                "case_id": pid, "patient_id": cases.patient_of(pid),
                 "method_a": a, "method_b": b, "spearman": rho,
                 "jaccard_top1pct": matrix["jaccard"]["top1pct"][pair],
                 "jaccard_top5pct": matrix["jaccard"]["top5pct"][pair],
@@ -270,7 +277,9 @@ def main() -> None:
             )
             randomization.setdefault(name, stages)
             for stage in stages:
-                rand_rows.append({"patient_id": pid, "method": name, **stage})
+                rand_rows.append({"case_id": pid,
+                                  "patient_id": cases.patient_of(pid),
+                                  "method": name, **stage})
             log.info("  randomisation %d/%d %s (%.0fs)", case_no, rand_cases, name,
                      time.perf_counter() - t0)
 
