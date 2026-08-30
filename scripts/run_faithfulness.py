@@ -245,10 +245,22 @@ def main() -> None:
     print(f"FAITHFULNESS — {dataset}/{args.split}, n={len(ids)} cases")
     print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better")
     print("=" * 86)
-    summary = faithfulness.groupby("method")[
-        ["deletion_auc", "insertion_auc", "bone_mass_fraction", "bone_enrichment"]
-    ].agg(["mean", "std"])
+    cols = ["deletion_auc", "insertion_auc", "bone_mass_fraction", "bone_enrichment"]
+    # pandas `.mean()` skips NaN, and `bone_mass_fraction` / `bone_enrichment`
+    # return NaN when the proxy mask is empty -- so without a count column two
+    # methods can be averaged over different subsets of cases and printed side
+    # by side as if they were comparable. The randomisation block below already
+    # counts its undefined rows and says so; this table did not.
+    summary = faithfulness.groupby("method")[cols].agg(["mean", "std", "count"])
     print(summary.round(4).to_string())
+    n_cases = faithfulness.groupby("method").size()
+    short = {c: summary[(c, "count")][summary[(c, "count")] < n_cases]
+             for c in cols}
+    for c, rows in short.items():
+        if len(rows):
+            print(f"   NOTE: {c} is undefined on some cases -- averaged over "
+                  f"{rows.to_dict()} of {n_cases.iloc[0]}. Not comparable across "
+                  f"methods with different counts.")
     print("\nbone_* columns are a coarse intensity-threshold proxy, not clinical ground truth:")
     print("they cannot tell WHICH anatomy the saliency landed on.")
 

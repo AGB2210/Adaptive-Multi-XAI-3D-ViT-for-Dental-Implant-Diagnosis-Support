@@ -31,6 +31,10 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from src.utils.log import get_logger
+
+log = get_logger("site_dataset")
+
 SITE_TARGETS = ("needs_implant", "available_height_mm", "ridge_width_mm")
 
 
@@ -141,6 +145,14 @@ def patch_centre(row, volume_shape, patch_size: int):
 
     z = float(field("site_z"))
     if not np.isfinite(z):
+        # Mid-volume is a guess, not a measurement, and it is on the training AND
+        # explanation paths -- so it must be visible. `load_sites` filters site_x
+        # and site_y but not site_z, and today this is unreachable only because
+        # a NaN site_z coincides with NaN mm targets that `drop_unmeasurable`
+        # removes. One schema change away from cutting patches from the middle
+        # of the scan while every number downstream still looks reasonable.
+        log.warning("site has no site_z -- centring the patch mid-volume, which "
+                    "is not where the site is")
         return (float(field("site_x")), float(field("site_y")), volume_shape[2] / 2.0)
     shift = patch_size // 4
     jaw = field("jaw", "lower")

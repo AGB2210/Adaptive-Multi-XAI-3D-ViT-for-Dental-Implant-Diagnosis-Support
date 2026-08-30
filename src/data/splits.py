@@ -153,7 +153,12 @@ def load_folds(path: str | Path) -> list[list[str]]:
 
 
 def check_folds_disjoint(folds: list[list[str]]) -> None:
-    """Every case appears in exactly one fold. A leak here contaminates every round."""
+    """Every PATIENT appears in exactly one fold. A leak contaminates every round.
+
+    Folds hold patient ids, never site ids -- splitting by site would let the
+    model see a patient's left molars in training and their right molars in
+    test and call it generalisation.
+    """
     seen: dict[str, int] = {}
     for k, ids in enumerate(folds):
         if len(ids) != len(set(ids)):
@@ -161,7 +166,7 @@ def check_folds_disjoint(folds: list[list[str]]) -> None:
             raise ValueError(f"fold {k} contains duplicates: {dupes[:5]}")
         for pid in ids:
             if pid in seen:
-                raise ValueError(f"case {pid!r} appears in folds {seen[pid]} and {k}")
+                raise ValueError(f"patient {pid!r} appears in folds {seen[pid]} and {k}")
             seen[pid] = k
 
 

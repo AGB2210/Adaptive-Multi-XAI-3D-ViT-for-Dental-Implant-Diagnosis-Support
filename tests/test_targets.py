@@ -189,12 +189,12 @@ class TestMetrics:
     def test_skill_is_zero_at_the_floor_and_one_when_exact(self):
         y = sample()
         spec = TargetSpec(binary=["b"], millimetres=MM).fit(y)
-        exact, _ = validation_skill(y, y.copy(), spec, {"per_label": {"b": {"auroc": 1.0}}})
+        exact, _, _ = validation_skill(y, y.copy(), spec, {"per_label": {"b": {"auroc": 1.0}}})
         assert exact == pytest.approx(1.0, abs=1e-3)
 
         floored = y.copy()
         floored[:, 1:] = np.median(y[:, 1:], axis=0)
-        at_floor, _ = validation_skill(y, floored, spec, {"per_label": {"b": {"auroc": 0.5}}})
+        at_floor, _, _ = validation_skill(y, floored, spec, {"per_label": {"b": {"auroc": 0.5}}})
         assert at_floor == pytest.approx(0.0, abs=1e-3)
 
     def test_skill_goes_negative_below_the_floor(self):
@@ -204,7 +204,7 @@ class TestMetrics:
         spec = TargetSpec(binary=["b"], millimetres=MM).fit(y)
         bad = y.copy()
         bad[:, 1:] += 50.0
-        skill, _ = validation_skill(y, bad, spec, {"per_label": {"b": {"auroc": 0.5}}})
+        skill, _, _ = validation_skill(y, bad, spec, {"per_label": {"b": {"auroc": 0.5}}})
         assert skill < -1.0
 
 
@@ -364,3 +364,26 @@ def test_n_reports_the_sites_both_sides_could_measure():
     pred[:4] = np.nan
     row = threshold_sensitivity(true, pred, NAMES, RULES, sweep=(12.0,))[0]
     assert row["n"] == 6
+
+
+def test_validation_skill_names_the_heads_that_did_not_contribute():
+    """A checkpoint selected on half the objective must say so.
+
+    `validation_skill` exists because selecting on AUROC alone picks the model
+    best at the easy head. If a millimetre head drops out the mean silently
+    becomes that same binary-only score, which is the failure the function was
+    written to prevent, arriving through the back door.
+    """
+    # A millimetre column with zero spread has a zero MAE floor, so its skill
+    # is undefined -- 1 - MAE/0 -- and the head cannot contribute.
+    y = np.zeros((40, 2))
+    y[:, 0] = np.tile([0.0, 1.0], 20)
+    y[:, 1] = 10.0
+    spec = TargetSpec(binary=["b"], millimetres=["available_height_mm"]).fit(y)
+    skill, parts, missing = validation_skill(
+        y, y.copy(), spec, {"per_label": {"b": {"auroc": 1.0}}})
+
+    assert "available_height_mm" in missing, (
+        "a head with no usable floor must be named, not silently dropped")
+    assert "available_height_mm" not in parts
+    assert np.isfinite(skill)

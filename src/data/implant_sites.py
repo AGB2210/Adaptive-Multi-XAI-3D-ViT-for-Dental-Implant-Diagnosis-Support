@@ -500,6 +500,8 @@ def site_is_occupied(mask, centre, spacing, centroids=None, tooth: int = 0,
         d = float(np.hypot((c[0] - float(centre[0])) * spacing[0],
                            (c[1] - float(centre[1])) * spacing[1]))
         return {"occupied": True, "by": "tooth", "tooth_id": int(tooth),
+                # Millimetres: a centroid offset. The restoration branch
+                # below files a VOLUME under this same key -- see there.
                 "occupancy_mm": d}
 
     # 2. A restoration physically filling the gap.
@@ -511,6 +513,13 @@ def site_is_occupied(mask, centre, spacing, centroids=None, tooth: int = 0,
             n = int((inside == label).sum())
             if n >= min_restoration_voxels:
                 return {"occupied": True, "by": name, "tooth_id": 0,
+                        # mm^3, not mm: voxel count x voxel volume. The
+                        # tooth branch above puts a DISTANCE in this key,
+                        # and at 0.3 mm the two have similar magnitudes so
+                        # nothing looks wrong. Reported for QA of the arch
+                        # fit only -- nothing downstream reads it, and
+                        # `needs_implant` comes from `occupied`. Split it
+                        # before anyone plots the column.
                         "occupancy_mm": float(n) * float(np.prod(spacing))}
     return empty
 

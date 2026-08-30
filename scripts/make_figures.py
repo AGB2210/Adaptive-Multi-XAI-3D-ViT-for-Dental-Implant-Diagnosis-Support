@@ -36,6 +36,7 @@ from src.xai.runner import (
     explanation_target,  # noqa: E402
     load_case_set,
     load_model,
+    patients_of,
     predict_case_logits,
     require_prerequisites,
     resolve_fold,
@@ -72,11 +73,24 @@ def select_cases(ids, y, probs, aux: pd.DataFrame, per_group: int = 2,
 
     # Auxiliary labels: recorded by the label builder, never trained on.
     if aux is not None and not aux.empty:
+        # `ids` are CASE ids on the site task and `aux` is keyed by patient, so
+        # `.loc[case_id]` misses -- and where a patient has several rows it
+        # returns a Series that `int()` cannot take. Unreachable today only
+        # because these two columns do not exist in the site CSV; add either and
+        # this raises. Look the patient up, and skip what is genuinely absent.
         indexed = aux.set_index("patient_id")
         for label in ("nerve_proximity", "bone_quality"):
             if label not in indexed.columns:
                 continue
-            positives = [p for p in ids if int(indexed.loc[p, label]) == 1] if len(indexed) else []
+            positives = []
+            for case_id in ids:
+                pid = patients_of([case_id])[0]
+                if pid not in indexed.index:
+                    continue
+                value = indexed.loc[pid, label]
+                value = value.iloc[0] if hasattr(value, "iloc") else value
+                if np.isfinite(value) and int(value) == 1:
+                    positives.append(case_id)
             if positives:
                 groups[f"aux_{label}"] = positives[:per_group]
     return groups

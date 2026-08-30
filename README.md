@@ -35,7 +35,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Native-resolution cache builder, patch dataset, training wiring | **Done** — the full cache is built: 522 volumes, 26.4 GB, ~19 min on the rented box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
-| XAI stack on the site task | **Done** — scores against the nerve canal |
+| XAI stack on the site task | **Done.** Randomisation and faithfulness stand; **localisation is withdrawn pending a re-run** — its anatomy masks were cut 7.2 mm from the box the model was shown |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.954 [0.944, 0.963] over 6,787 sites, each scored once by the model that never saw it |
 | Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator is written and never run on real scans |
 | Guide sign-off on clinical thresholds | **Pending** |

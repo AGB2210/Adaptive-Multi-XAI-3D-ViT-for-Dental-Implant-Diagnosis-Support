@@ -50,6 +50,10 @@ import numpy as np
 import torch
 from torch import nn
 
+from src.utils.log import get_logger
+
+log = get_logger("targets")
+
 
 @dataclass
 class TargetSpec:
@@ -364,6 +368,14 @@ def validation_skill(y_true: np.ndarray, out: np.ndarray, spec: TargetSpec,
     Both are 0 for a useless model and 1 for a perfect one, so the mean is
     meaningful. Skill can go negative, which is informative rather than a bug: a
     head predicting worse than its own floor should drag the score down.
+
+    A HEAD THAT PRODUCES NO NUMBER IS DROPPED, AND THAT IS REPORTED. If a
+    millimetre head's MAE or floor comes back non-finite it cannot contribute,
+    and the mean silently becomes the binary-only skill -- which is exactly the
+    selection this function exists to prevent, since the binary head is the easy
+    one. `skill_parts` names what actually went in, and `skill_heads_missing`
+    names what did not, so a checkpoint chosen on half the objective is visible
+    in `metrics.json` rather than inferable from a count.
     """
     parts: dict[str, float] = {}
 
@@ -383,4 +395,13 @@ def validation_skill(y_true: np.ndarray, out: np.ndarray, spec: TargetSpec,
                 parts[name] = 1.0 - m["mae"] / floor
 
     skill = float(np.mean(list(parts.values()))) if parts else float("nan")
-    return skill, parts
+
+    # Not raised: a head can legitimately be undefined on a degenerate split and
+    # refusing to score would stop a run mid-training. But the mean above is then
+    # over a DIFFERENT objective than the config asked for, so the caller is told
+    # which heads did not contribute rather than left to infer it from a count.
+    missing = [n for n in list(spec.binary) + list(spec.millimetres) if n not in parts]
+    if missing:
+        log.warning("validation skill computed WITHOUT %s -- selecting on a "
+                    "partial objective", ", ".join(missing))
+    return skill, parts, missing

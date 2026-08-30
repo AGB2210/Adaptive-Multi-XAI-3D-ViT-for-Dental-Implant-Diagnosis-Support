@@ -229,7 +229,7 @@ class Trainer:
                 # which is the easy half of the task ("is there a tooth here"),
                 # so selecting on it would pick the checkpoint that is best at
                 # the half the project is not about.
-                macro, parts = validation_skill(targets, probs, self.spec, metrics)
+                macro, parts, missing = validation_skill(targets, probs, self.spec, metrics)
                 mm = regression_metrics(targets[:, n_bin:], probs[:, n_bin:],
                                         self.spec.millimetres)
                 for name, m in mm.items():
@@ -237,6 +237,11 @@ class Trainer:
                 row["val_skill"] = round(macro, 5) if np.isfinite(macro) else float("nan")
                 metrics["skill"] = macro
                 metrics["skill_parts"] = parts
+                # Which heads did NOT contribute. Empty is the normal case; a
+                # non-empty list means this checkpoint was selected on a partial
+                # objective, and that belongs in metrics.json rather than being
+                # inferable by counting skill_parts against the config.
+                metrics["skill_heads_missing"] = missing
                 metrics["regression"] = mm
             else:
                 macro = metrics["macro_auroc"]

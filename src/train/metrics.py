@@ -201,7 +201,12 @@ def evaluate(
 
     for key in ("auroc", "ap", "f1"):
         values = [out["per_label"][n][key] for n in label_names]
-        out[f"macro_{key}"] = float(np.nanmean(values)) if np.isfinite(values).any() else float("nan")
+        finite = int(np.isfinite(values).sum())
+        # `nanmean` over a partly-undefined set is a macro over FEWER labels than
+        # the heading says. The all-NaN case was guarded; the partial one was not.
+        out[f"macro_{key}"] = float(np.nanmean(values)) if finite else float("nan")
+        if finite and finite < len(label_names):
+            out[f"macro_{key}_n_labels"] = finite
 
     if n_boot:  # macro AUROC CI, resampled once for all labels
         rng = np.random.default_rng(seed + 999)

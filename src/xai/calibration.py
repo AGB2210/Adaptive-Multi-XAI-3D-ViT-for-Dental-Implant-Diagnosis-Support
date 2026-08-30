@@ -48,8 +48,10 @@ def fit_temperature(
 ) -> float:
     """Single scalar temperature minimising BCE on the validation split.
 
-    One temperature for all labels: with ~60 validation patients, per-label
-    temperatures would be fitted on ~25 positives each and would overfit.
+    One temperature for all labels. The validation split is ~1,339 SITES from
+    ~97 patients, and the positives that constrain the fit are the ~146 sites
+    needing an implant -- so per-label temperatures would be fitted on far fewer
+    independent observations than the site count suggests, and would overfit.
     """
     _require_binary_targets(targets, "fit_temperature")
 
@@ -87,7 +89,8 @@ def expected_calibration_error(
 ) -> tuple[float, list[dict]]:
     """ECE over all label predictions pooled, plus per-bin detail for the diagram.
 
-    Multi-label, so every (patient, label) pair is one binary prediction.
+    Multi-label, so every (CASE, label) pair is one binary prediction -- a case
+    being a site on this task, not a patient.
     """
     _require_binary_targets(targets, "expected_calibration_error")
     p = np.asarray(probs, dtype=np.float64).ravel()

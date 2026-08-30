@@ -3,10 +3,12 @@
     python scripts/pool_cv.py --config configs/default.yaml --folds 5
 
 Each CV round trains on three folds, selects on a fourth, and scores the fifth.
-Averaging the five resulting AUROCs is *not* the same as scoring all 532 cases
-together: the mean of five estimates on ~107 cases each has no straightforward
-confidence interval, and it silently weights a fold with 14 implant positives the
-same as one with 15.
+Averaging the five resulting AUROCs is *not* the same as scoring every case
+together: the mean of five per-fold estimates has no straightforward confidence
+interval, and it silently weights a fold with 14 implant positives the same as
+one with 15. (Folds hold PATIENTS -- ~97 each -- while the rows scored are
+SITES, ~1,339 each. The two counts are not interchangeable and the interval
+must be clustered on the first, not the second.)
 
 So this script rebuilds the per-case predictions instead. For each round it
 reloads that round's best checkpoint, runs it over its own held-out test fold --
