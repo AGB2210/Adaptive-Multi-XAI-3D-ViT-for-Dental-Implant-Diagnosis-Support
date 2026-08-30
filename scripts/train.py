@@ -244,6 +244,27 @@ def synthetic_loaders(cfg, n_train: int = 96, n_val: int = 32):
     }
 
 
+def run_name(model_name: str, fold: int | None, synthetic: bool) -> str:
+    """Directory name for one run.
+
+    A cross-validation round must not overwrite the previous one: naming every
+    run after the model wrote five folds into one directory unless --out was
+    passed by hand, and `pool_cv.py` -- which looks for cv_fold{k} -- then either
+    failed outright or pooled one model against itself.
+
+    A function rather than three lines inside `main` because tests/test_config.py
+    asserts this contract, and it was asserting against its own COPY of the rule.
+    A copy agrees until it does not, which is how the anatomy masks came to sit
+    7.2 mm from the model's input.
+
+    The synthetic gate never claims a fold directory: it trains on planted blobs
+    and its checkpoint must not be mistaken for a cross-validation round.
+    """
+    if fold is not None and not synthetic:
+        return f"cv_fold{fold}"
+    return model_name + ("_synthetic" if synthetic else "")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -296,10 +317,8 @@ def main() -> None:
     # single checkpoint, and scripts/pool_cv.py -- which looks for cv_fold{k} --
     # either fails or, worse, pools one model against itself. This used to
     # depend on remembering --out.
-    run_name = cfg.model.name + ("_synthetic" if args.synthetic else "")
-    if args.fold is not None and not args.synthetic:
-        run_name = f"cv_fold{args.fold}"
-    out_dir = Path(args.out or Path(cfg.train.out_dir) / run_name)
+    out_dir = Path(args.out or Path(cfg.train.out_dir) / run_name(
+        cfg.model.name, args.fold, args.synthetic))
 
     # ---- data ----------------------------------------------------------
     if args.synthetic:

@@ -223,14 +223,16 @@ class TestRunNaming:
     train.py used to name every run after the model, so five folds wrote to one
     directory unless --out was passed by hand. pool_cv.py looks for cv_fold{k}
     and would then either fail outright or pool a single model against itself.
+
+    This class used to carry its OWN copy of the naming rule and assert against
+    that, so the two could drift apart while every assertion still passed. It
+    now calls `train.run_name`, which is the function `main` uses.
     """
 
     @staticmethod
     def run_name(model_name: str, fold, synthetic: bool) -> str:
-        name = model_name + ("_synthetic" if synthetic else "")
-        if fold is not None and not synthetic:
-            name = f"cv_fold{fold}"
-        return name
+        train = importlib.import_module("train")
+        return train.run_name(model_name, fold, synthetic)
 
     def test_each_fold_gets_its_own_directory(self):
         names = {self.run_name("vit3d", k, False) for k in range(5)}
