@@ -306,9 +306,22 @@ class Trainer:
             # target's mean, and nothing raises.
             "target_spec": self.spec.state_dict() if self.spec is not None else None,
         }
-        torch.save(payload, self.out_dir / name)
+        # Write then rename, so an interrupted save cannot leave a truncated
+        # best.pt behind. `scripts/build_cache.py` already does this for cached
+        # volumes with the note "a partial file can never look cached" -- and a
+        # cached volume costs 19 minutes of the whole cohort to rebuild, while
+        # this file is the output of a 5.6-hour five-fold run. The cheaper
+        # artifact had the guard and the expensive one did not.
+        target = self.out_dir / name
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        torch.save(payload, tmp)
+        tmp.replace(target)
+
         if metrics is not None:
-            (self.out_dir / "best_val_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+            path = self.out_dir / "best_val_metrics.json"
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+            tmp.replace(path)
 
     def load_checkpoint(self, path: str | Path, resume: bool = True) -> None:
         ckpt = load_checkpoint_file(path, self.device)
