@@ -2,8 +2,11 @@
 
     python scripts/build_implant_labels.py --config configs/sites.yaml
 
-Writes <artifacts_dir>/sites_<dataset>.csv: one row per scan per tooth position, 28
-positions per scan (third molars excluded), so ~14,900 rows from 532 scans.
+Writes <artifacts_dir>/sites_<dataset>.csv: one row per scan per tooth position,
+28 positions per scan (third molars excluded). The ToothFairy3 build produced
+14,616 rows from 522 scans -- ten of the 532 raise on ambiguous orientation and
+are skipped, which `superior_sign` refuses to guess at rather than inverting the
+superior-inferior axis on some scans.
 
 WHAT EACH ROW ANSWERS
 
@@ -59,6 +62,15 @@ from src.utils.log import get_logger  # noqa: E402
 log = get_logger("implant_labels")
 
 
+# A build that skips most of the cohort still exits 0 with a plausible CSV, so
+# the skip rate is a hard gate rather than a warning.
+#
+# THE MARGIN IS ZERO ON THE CURRENT COHORT. Ten of ToothFairy3's 532 scans carry
+# only LowerJaw, both canals and the pharynx, so no upper/lower structure pair
+# resolves and `superior_sign` raises rather than guessing. That is 1.88%
+# against this 2% ceiling: one more such scan in a future cohort and the build
+# refuses to certify. That is the guard behaving correctly, but it is worth
+# knowing before it happens, because the failure will look sudden.
 MAX_SKIP_FRACTION = 0.02
 
 
