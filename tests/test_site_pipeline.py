@@ -200,7 +200,7 @@ class TestTheMaskSeamAndTheInputSeamAreTheSameSeam:
         """
         import nibabel as nib
 
-        from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
+        from src.data.implant_sites import LOWER_JAW, UPPER_JAW
         from src.data.site_dataset import cut_patch, patch_centre
         from src.xai.site_masks import patch_masks
 
