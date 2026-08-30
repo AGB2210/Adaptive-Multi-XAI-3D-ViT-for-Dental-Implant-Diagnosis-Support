@@ -10,7 +10,7 @@ before you start paying for a GPU.**
 
 ## 0. What you are running
 
-For each tooth position in a CBCT scan, the model predicts two things:
+For each tooth position in a CBCT scan, the model predicts three things:
 
 | Head | Kind | Question |
 |---|---|---|
@@ -29,9 +29,11 @@ methods also written from scratch. Explanations are scored against the inferior
 alveolar canal: if the model says *"not feasible, nerve too close"*, we check
 whether the explanation actually points at the nerve.
 
-**Scope is the lower jaw only.** The upper jaw could be measured on 4.3% of
-scans against 91.8% for the lower, so it is excluded on purpose. This is a
-finding, not an oversight — see `README.md`.
+**Scope is the lower jaw only.** Of the sites that need an implant, 93.4% are
+measurable in the mandible (826 of 884) and 1.3% in the maxilla (36 of 2,682) --
+after an upper tooth is lost the ridge resorbs and ToothFairy3's `UpperJaw` mask
+does not cover the remnant. Excluded on purpose; a finding, not an oversight.
+See `README.md`.
 
 ---
 
@@ -40,7 +42,7 @@ finding, not an oversight — see `README.md`.
 | | Minimum | Why |
 |---|---|---|
 | GPU | 16 GB VRAM | 96³ patches at batch 64. 24 GB lets you raise the batch size |
-| Disk | **80 GB free** | 28 GB dataset + 27 GB cache + checkpoints and headroom |
+| Disk | **80 GB free** | 28 GB dataset + 26.4 GB cache + checkpoints and headroom |
 | RAM | 32 GB | cache building holds whole volumes in memory |
 | Python | 3.11 or 3.12 | both are gated in CI |
 
@@ -53,8 +55,9 @@ This line used to read "~100 MB per scan × 532 ≈ 52 GB", and that was wrong i
 way worth keeping on the page. It was extrapolated from the 14 scans cached on
 the development machine — which are the first 14 in alphabetical order, all of
 them from the `ToothFairy3F` cohort, and F scans are among the largest at
-512x512x262. The cohort is 61 F, 381 P and 44 S, so a head-of-list sample of one
-cohort overestimated the mean by a factor of two.
+512x512x262. The cohort is 63 F, 411 P and 48 S across the 522 usable scans, so
+a head-of-list sample drawn entirely from the smallest and largest-file
+sub-cohort overestimated the mean by a factor of two.
 
 `src/xai/runner.py` already carries the same lesson for a different reason:
 *"Head-truncation (`ids[:n]`) is not a sample."* It applies to disk estimates as
@@ -182,10 +185,18 @@ later be mistaken for results.
 ## 4. The real run
 
 **Most of this has already been run once.** All five folds are trained and
-pooled, the XAI suite is complete with patient-clustered intervals, the
-faithfulness diagnosis has been done with `--baseline mean --score deviation`,
-and a CNN baseline was measured on fold 0. That run cost about ₹455 and its
-outputs live on the box that produced them.
+pooled, the XAI suite is complete, and a CNN baseline was measured on fold 0.
+That run cost about ₹455 and its outputs live on the box that produced them.
+
+**A faithfulness re-run was done with a mean baseline, and WHICH FLAGS produced
+it is unresolved.** It was reported as `--baseline mean --score deviation`, but
+`score="deviation"` integrates `-|prediction - reference|`, which is non-positive
+by construction -- measured at most -0.0037 over six seeds -- while every value
+in the reported column is positive. So that column is not deviation-mode output
+from this code. The likely explanation is `--baseline mean` with the default
+`--score response`, which would mean the baseline alone produced the separation
+and the monotonicity half of the diagnosis is still untested. If you ran it, say
+which flags you used; if you are re-running, run both and label them.
 
 So read this section as two different things depending on who you are. **If you
 are reproducing the run**, everything below still applies exactly as written.
@@ -235,7 +246,7 @@ molar directly above a lower site claimed it. 414 mandibular sites were marked
 occupied by a maxillary tooth while their own tooth was missing from the mask.
 Occupancy is now a label lookup and `needs_implant` went 530 -> 709.
 
-### 4b. Build the cache — ~19 min on 30 vCPU, ~27 GB
+### 4b. Build the cache — ~19 min on 30 vCPU, 26.4 GB
 
 ```bash
 python scripts/build_site_cache.py --config configs/sites.yaml
