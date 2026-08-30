@@ -108,7 +108,9 @@ class TestCorticalRidges:
         assert abs(got["ridge_width_mm"] - width_mm) <= 3 * SPACING[0], (
             f"measured {got['ridge_width_mm']:.2f} mm against a built-in "
             f"{width_mm:.2f} mm. A value near one plate thickness means the "
-            f"cavity fill is not reaching the width probe"
+            f"threshold landed above trabecular bone again, so the probe is "
+            f"reading cortex alone -- look at bone_threshold's second pass, not "
+            f"at the probe"
         )
 
     def test_the_height_survives_a_cortical_ridge_too(self):
@@ -120,12 +122,20 @@ class TestCorticalRidges:
             f"{height_mm:.2f} mm"
         )
 
-    def test_the_canal_is_not_filled_in_along_with_the_marrow(self):
-        """The fill has to spare the canal, which is the whole difficulty.
+    def test_the_canal_is_still_found_once_trabecular_bone_counts_as_bone(self):
+        """Lowering the threshold must not swallow the canal along with marrow.
 
-        A canal is a cavity, and so is marrow; filling in 3D would swallow both.
-        With no canal present the estimator must fall back to bone extent, and
-        with one present it must find it -- so the two cases must differ.
+        The correction includes trabecular bone, which sits only just above soft
+        tissue -- and the canal is darker than either, so a threshold pushed too
+        far down would take the canal with it and the estimator would report a
+        solid column. NOTE: this is a THRESHOLD, not a morphological fill. The
+        per-slice cavity fill was considered and rejected, because a 96-voxel
+        patch is a short segment of the arch rather than a closed ring and
+        whether the cortex encloses anything in-plane depends on where round the
+        jaw the site sits.
+
+        With no canal the estimator must fall back to bone extent; with one it
+        must find it. The two cases therefore have to differ.
         """
         with_canal, _, _ = cortical_phantom()
         without, _, _ = cortical_phantom(canal_thick=0)

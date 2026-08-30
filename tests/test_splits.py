@@ -102,8 +102,10 @@ def test_mismatched_lengths_raise():
 
 
 # --- cross-validation -------------------------------------------------------
-# The failure these guard against is a leak: a case that appears in two folds is
-# tested by a model that trained on it, and nothing downstream would notice.
+# The failure these guard against is a leak: a PATIENT who appears in two folds
+# is tested by a model that trained on them, and nothing downstream would
+# notice. Folds hold patients, never sites -- splitting by site would put one
+# jaw's left molars in train and its right molars in test.
 
 def _cv_data(n=200, seed=0):
     rng = np.random.default_rng(seed)
