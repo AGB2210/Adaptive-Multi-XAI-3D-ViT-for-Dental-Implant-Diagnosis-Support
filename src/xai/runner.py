@@ -226,7 +226,7 @@ class CaseSet:
     def _volume(self, patient_id: str) -> np.ndarray:
         cached = self._volumes.get(patient_id)
         if cached is None:
-            # Memory-mapped: a native-resolution cache is 26 GB and a patch
+            # Memory-mapped: a native-resolution cache is 26.4 GB and a patch
             # read should touch only the pages it needs.
             cached = np.load(Path(self.cache) / f"{patient_id}.npy", mmap_mode="r")
             self._volumes[patient_id] = cached

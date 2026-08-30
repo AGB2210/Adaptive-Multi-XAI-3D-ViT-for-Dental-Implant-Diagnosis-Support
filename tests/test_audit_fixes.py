@@ -200,7 +200,7 @@ class TestAugmentationMatchesTheCache:
 
     def test_it_does_not_interpolate_away_the_resolution_it_paid_for(self):
         """ndimage.rotate(order=1) blurs the native 0.3 mm detail that is the
-        entire reason this task caches 52 GB."""
+        entire reason this task caches 26.4 GB."""
         cfg = load_config("configs/sites.yaml")
         assert cfg.augment.rotate_deg == 0.0 or cfg.augment.rotate_prob == 0.0
 

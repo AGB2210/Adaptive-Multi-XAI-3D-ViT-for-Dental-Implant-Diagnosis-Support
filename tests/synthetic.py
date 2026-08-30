@@ -1,7 +1,7 @@
 """Synthetic CBCT-ish volumes with a planted, known-location signal.
 
 Two jobs:
-  1. Let every module be tested without touching 265 GB of real scans.
+  1. Let every module be tested without touching the 28 GB cohort.
   2. Give the XAI phase a case where the ground-truth signal location is known,
      so attribution maps can be scored rather than eyeballed.
 

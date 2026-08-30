@@ -217,7 +217,7 @@ class TestSitePatchDataset:
             SitePatchDataset(cache, sites, patch_size=16)
 
     def test_volumes_are_memory_mapped(self, tmp_path):
-        """A 50 GB native-resolution cache must not be pulled into RAM."""
+        """A 26.4 GB native-resolution cache must not be pulled into RAM."""
         cache, sites = self.build(tmp_path)
         ds = SitePatchDataset(cache, sites, patch_size=16)
         assert isinstance(ds.volume("A"), np.memmap)

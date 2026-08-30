@@ -185,7 +185,7 @@ def cut_patch(volume: np.ndarray, centre, size: int, pad_value: float = 0.0) -> 
 class SitePatchDataset(Dataset):
     """One sample per tooth site: a native-resolution box and its labels.
 
-    Volumes are memory-mapped, so a 50 GB native-resolution cache costs no RAM
+    Volumes are memory-mapped, so a 26.4 GB native-resolution cache costs no RAM
     and a patch read touches only the pages it needs. Do not switch this to
     np.load without mmap_mode unless the cache genuinely fits in memory.
     """
