@@ -1,13 +1,15 @@
 """Training samples that are tooth SITES, not whole scans.
 
-One 532-scan dataset becomes ~14,900 site samples, and each sample is a small
-box cut from the scan at its native 0.3 mm. That is the whole reason for this
+One 532-scan dataset becomes 14,616 site rows -- 28 positions across the 522
+scans whose orientation resolves -- and each sample is a small box cut from the
+scan at its native 0.3 mm. Under the default filters (teeth tier, mandible,
+measurable) 6,787 of those rows are trainable, from 486 patients. That is the whole reason for this
 module, and it is worth being explicit about why it beats the obvious
 alternative of feeding the model a whole downsampled head:
 
-    128^3 at 1.0 mm      whole head, 3.3x blurred     532 samples
-    256^3 at 0.5 mm      whole head, 1.7x blurred     532 samples
-    96^3  at 0.3 mm      one site, NOT blurred      ~14,900 samples
+    128^3 at 1.0 mm      whole head, 3.3x blurred       532 samples
+    256^3 at 0.5 mm      whole head, 1.7x blurred       532 samples
+    96^3  at 0.3 mm      one site, NOT blurred        6,787 samples
 
 The patch is both sharper and 19x smaller than the 256^3 volume. It matters
 because the structure the model has to respect is the inferior alveolar canal,
