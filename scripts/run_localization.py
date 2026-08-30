@@ -1,21 +1,32 @@
 """Score explanations against ToothFairy3's ground-truth masks.
 
-    python scripts/run_localization.py --checkpoint artifacts/runs/cv_fold1/best.pt
+    python scripts/run_localization.py --config configs/sites.yaml         --checkpoint artifacts_sites/runs/cv_fold0/best.pt
 
-Writes artifacts/results_localization.csv and a summary table.
+Writes <artifacts_dir>/results_localization.csv and a summary table.
 
-Why this exists. Deletion/insertion ask whether the model's own score moves when
-the highlighted voxels are removed -- self-consistency, not correctness. A method
-can be perfectly self-consistent and point at the wrong anatomy. ToothFairy3
-ships voxel masks, so here the question "is the explanation pointing at the
-implant?" has a ground-truth answer.
+WHY THIS EXISTS. Deletion and insertion ask whether the model's own score moves
+when the highlighted voxels are removed -- self-consistency, not correctness. A
+method can be perfectly self-consistent and point at the wrong anatomy.
+ToothFairy3 ships voxel masks, so here the question has a ground-truth answer.
+This is the only annotation-grounded number in the project.
 
-And it settles the project's open question. 68 of the 74 implant cases also
-carry a crown or bridge, so the classifier could be scoring `implant` by
-detecting the restoration on top of it. Every case is therefore scored twice:
-once against the implant mask, once against the crown/bridge mask. If the
-implant explanation prefers the neighbour, the model's implant performance must
-not be described as implant detection.
+ON THE SITE TASK, the question is: the model predicts an available height, which
+in the mandible IS crest-to-canal distance -- does the explanation point at the
+INFERIOR ALVEOLAR CANAL? The competitor is the surrounding jawbone. A map spread
+over bone generally is describing where the mandible is, not why the site fails.
+The canal is a dark tube inside bone occupying a median 0.48% of a patch, so an
+edge detector cannot find it by accident, which is exactly what makes this a
+harder test than the one below.
+
+ON THE SUPERSEDED DETECTION TASK, the question was "does the explanation point
+at the implant?", scored against the crown/bridge mask as the competitor --
+because 68 of its 74 implant cases also carried a restoration, so the classifier
+could have been scoring `implant` by detecting the metal crown on top of it. A
+dental implant is titanium: the brightest, sharpest object in a CBCT, which any
+edge-responsive method finds trivially. That is how Integrated Gradients scored
+86x chance on it while failing the randomisation check outright.
+
+Both paths run through the same code; `cfg.task.sites_csv` selects which.
 """
 
 from __future__ import annotations

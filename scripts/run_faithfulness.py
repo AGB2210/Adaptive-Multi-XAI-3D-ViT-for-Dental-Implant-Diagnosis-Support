@@ -1,6 +1,9 @@
 """Faithfulness metrics that need no annotation.
 
-    python scripts/run_faithfulness.py --checkpoint artifacts/runs/vit3d_vit3d/best.pt --n-cases 20
+    python scripts/run_faithfulness.py --config configs/sites.yaml \n        --checkpoint artifacts_sites/runs/cv_fold0/best.pt
+
+Do not pass --n-cases to shrink the run: the sample sizes come from the `xai:`
+block and are the sizes that make a claim.
 
 Emits artifacts/results_faithfulness.csv, artifacts/results_agreement.csv,
 artifacts/results_randomization.csv and the corresponding figures.
