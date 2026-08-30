@@ -277,7 +277,27 @@ def test_lime_grid_is_independent_of_the_model_patch_grid(model, volume):
 
 # ---- gradients live on the input, not on the weights -----------------------
 
-def test_frozen_parameters_still_allow_every_method(model, volume):
+@pytest.fixture
+def frozen(model):
+    """Freeze the shared model for one test, then put it back.
+
+    `model` is module-scoped. Freezing it in the test body left 45 parameters
+    with requires_grad=False for every test that ran afterwards -- harmless only
+    because these two happen to be last in the file, and silently order-dependent
+    the moment one is added below them or the run is shuffled.
+    """
+    original = [p.requires_grad for p in model.parameters()]
+    for param in model.parameters():
+        param.requires_grad_(False)
+    try:
+        yield model
+    finally:
+        for param, was in zip(model.parameters(), original):
+            param.requires_grad_(was)
+        model.zero_grad(set_to_none=True)
+
+
+def test_frozen_parameters_still_allow_every_method(frozen, volume):
     """The autograd graph must hang off the input.
 
     Attribution needs gradients to reach the input, which requires the INPUT to
@@ -285,9 +305,7 @@ def test_frozen_parameters_still_allow_every_method(model, volume):
     call .backward() on the volume directly, so if they silently depended on the
     weights requiring grad, freezing them would raise "does not require grad".
     """
-    for param in model.parameters():
-        param.requires_grad_(False)
-
+    model = frozen
     for name in ("attention_rollout", "grad_rollout", "gradcam",
                  "integrated_gradients", "gradient_shap"):
         method = build_method(name, model, torch.device("cpu"),
@@ -298,14 +316,11 @@ def test_frozen_parameters_still_allow_every_method(model, volume):
         assert torch.isfinite(out).all(), name
 
 
-def test_no_weight_gradients_are_computed_when_parameters_are_frozen(model, volume):
+def test_no_weight_gradients_are_computed_when_parameters_are_frozen(frozen, volume):
     """The point of freezing: no .grad buffers on the weights at all."""
-    for param in model.parameters():
-        param.requires_grad_(False)
+    build_method("integrated_gradients", frozen, torch.device("cpu"), steps=4).attribute(volume, 0)
 
-    build_method("integrated_gradients", model, torch.device("cpu"), steps=4).attribute(volume, 0)
-
-    assert all(p.grad is None for p in model.parameters())
+    assert all(p.grad is None for p in frozen.parameters())
 
 
 def test_check_input_supplies_the_graph(model, volume):
