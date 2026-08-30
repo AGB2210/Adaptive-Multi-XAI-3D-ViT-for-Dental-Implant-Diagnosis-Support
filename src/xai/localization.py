@@ -97,25 +97,29 @@ def pointing_game(saliency, mask) -> bool:
 def mass_inside(saliency, mask) -> float:
     """Share of total attribution mass that lands inside the mask.
 
-    WHAT "MASS" MEANS HERE, because it is not what it sounds like for a signed
-    method. Every map arrives from `SaliencyMethod.attribute`, which min-max
-    normalises to [0, 1]. For Integrated Gradients and GradientSHAP, whose raw
-    attributions are signed, that maps the most-NEGATIVE voxel to 0 and a voxel
-    of ZERO attribution to wherever zero falls in the map's own range -- often
-    well above 0. On a raw range of [-5, +3], zero attribution becomes 0.625.
+    WHAT "MASS" MEANS, AND WHY THE FOUR METHODS DO NOT AGREE ON IT. Measured on
+    the configured ensemble: every method emits a NON-NEGATIVE map, so the clip
+    below is dead code on anything reaching here through
+    `SaliencyMethod.attribute`. It is kept only for a caller that passes a raw
+    map.
 
-    So a voxel the method is indifferent about carries more mass than one it
-    actively votes against, and enrichment measures "how far into the upper end
-    of this map's range does the structure sit" rather than "how much positive
-    evidence landed on it". That is a defensible thing to measure and it is
-    applied identically to every method, so the comparison stays fair -- but it
-    is not the plain reading of the word, and any claim built on it should use
-    the first phrasing rather than the second.
+    But they are non-negative for three different reasons, and that is the part
+    worth knowing:
 
-    The `np.clip` below is therefore DEAD on anything coming through
-    `attribute()`, which never emits a negative. It is kept for a caller that
-    passes a raw map, where it is the only thing standing between a signed field
-    and a meaningless ratio.
+      attention_rollout   non-negative by construction -- attention weights
+      gradcam             ReLU, so NEGATIVE EVIDENCE IS DISCARDED
+      integrated_gradients   .abs(), so magnitude REGARDLESS OF SIGN
+      gradient_shap          .abs(), same
+
+    So a voxel that argues strongly AGAINST the target contributes full mass
+    under IG and GradientSHAP and zero mass under Grad-CAM. Enrichment is
+    therefore not measuring quite the same quantity across the row: for two
+    methods it is "how much does this region matter", for one it is "how much
+    does this region support the answer".
+
+    That is a caveat on the comparison, not a fault -- `absolute=True` is the
+    standard choice for IG and the alternative has its own problems. It belongs
+    beside any claim that one method localises better than another.
     """
     s, m = _as_numpy(saliency), _as_numpy(mask) > 0
     s = np.clip(s, 0.0, None)
