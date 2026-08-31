@@ -61,6 +61,33 @@ from src.xai.visualize import (  # noqa: E402
 log = get_logger("faithfulness")
 
 
+def direction_note(target: int, n_bin: int, score: str, label: str) -> str:
+    """The one line printed above the deletion/insertion table.
+
+    Pulled out of `main` because it is the only place the table's DIRECTION is
+    asserted, and because reading a loop variable to decide it is how this line
+    came to raise `UnboundLocalError` under `--only-randomization`: the loop
+    that bound `target` is skipped entirely by that flag, so the guard fired on
+    a name that was never assigned. A pure function of the four things the
+    decision actually depends on cannot repeat that, and can be tested without
+    a checkpoint.
+
+    ONLY FOR A PROBABILITY TARGET is the usual reading founded. The metric
+    assumes a score that rises with evidence for the class; a millimetre head is
+    not that -- deleting voxels moves a length toward whatever the baseline
+    implies, which may be larger or smaller. Under score="deviation" the negated
+    absolute change restores the assumption and the usual reading applies again.
+    """
+    usual = "deletion AUC: LOWER is better    insertion AUC: HIGHER is better"
+    if target < n_bin:
+        return usual
+    if score == "deviation":
+        return usual + "   (millimetre head, restored by score=deviation)"
+    return (f"target {label!r} is a MILLIMETRE head at score={score!r}: "
+            f"neither direction is founded here. Compare methods, do not rank "
+            f"them against an absolute.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -146,6 +173,12 @@ def main() -> None:
     figures = art / "figures"
 
     rows, agreement_rows = [], []
+    # Independent of the case loop below, which --only-randomization skips.
+    # On the hybrid task and under an explicit task.explain_target this is
+    # exact; on a pure-classification task it falls back to column 0, and there
+    # every column is binary, so the direction the header reports is the same
+    # whichever one is explained.
+    header_target = explanation_target(cfg, spec)
     todo = [] if args.only_randomization else ids
     # Progress, because this loop prints nothing for tens of minutes on CPU and
     # a remote operator cannot tell a slow run from a hung one. The RUNBOOK sends
@@ -247,21 +280,9 @@ def main() -> None:
 
     print("\n" + "=" * 86)
     print(f"FAITHFULNESS — {dataset}/{args.split}, n={len(ids)} cases")
-    # ONLY FOR A PROBABILITY TARGET. The metric assumes a score that rises
-    # with evidence for the class; a millimetre head is not that -- deleting
-    # voxels moves a length toward whatever the baseline implies, which may
-    # be larger or smaller, so neither direction is founded under
-    # score="response". Under score="deviation" the negated absolute change
-    # restores the assumption and the usual reading applies again.
-    if target < n_bin:
-        print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better")
-    elif args.score == "deviation":
-        print("deletion AUC: LOWER is better    insertion AUC: HIGHER is better"
-              "   (millimetre head, restored by score=deviation)")
-    else:
-        print(f"target {label_names[target]!r} is a MILLIMETRE head at "
-              f"score={args.score!r}: neither direction is founded here. "
-              f"Compare methods, do not rank them against an absolute.")
+    label = (label_names[header_target] if header_target < len(label_names)
+             else str(header_target))
+    print(direction_note(header_target, n_bin, args.score, label))
     print("=" * 86)
     cols = ["deletion_auc", "insertion_auc", "bone_mass_fraction", "bone_enrichment"]
     # pandas `.mean()` skips NaN, and `bone_mass_fraction` / `bone_enrichment`
