@@ -134,14 +134,13 @@ python -m pytest -q
 **Everything must pass and nothing may fail.** Don't check the count against a
 number written here -- it only goes up as tests are added, and a runbook that
 tells you to halt on `385 passed` because it was written at 380 wastes your
-time. `0 failed` is the gate. (380 at v3.0.1, 458 at v3.4.0, for reference
-only.)
+time. `0 failed` is the gate.
 
-**One skip is expected, and following this runbook will not clear it.** You
-will see `457 passed, 1 skipped`. The skipped test checks that the **1 mm
-whole-volume cache** is correctly detected as stale against the 256 config, and
-it skips when that cache is absent. Nothing on this run list builds it -- step
-4b builds the *site* cache, `artifacts_sites/cache/`, which is a different
+**One skip is expected, and following this runbook will not clear it.** The
+summary line ends `1 skipped`, and that is correct. The skipped test checks that
+the **1 mm whole-volume cache** is correctly detected as stale against the 256
+config, and it skips when that cache is absent. Nothing on this run list builds
+it -- step 4b builds the *site* cache, `artifacts_sites/cache/`, which is a different
 directory for a different task. The 1 mm cache belongs to the superseded
 whole-volume pipeline, so on a machine set up for the site task this test skips
 permanently and correctly. CI reports the same skip for the same reason. Any
