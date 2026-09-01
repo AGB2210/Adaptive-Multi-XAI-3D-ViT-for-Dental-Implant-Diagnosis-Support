@@ -488,6 +488,20 @@ best localiser when the top method is not separated from the rest. There are no
 pass/fail labels anywhere, because Adebayo et al. define no cutoff -- the
 intervals are the claim.
 
+**The reported statistic is the MEDIAN**, which is `clustered_ci`'s default, and
+it is not incidental. Recomputing the randomisation table with the sample mean
+instead moves every point estimate and, on the fold-0 data, reverses whether the
+two least faithful methods are separated at all -- they overlap by 0.0002 under
+the median in every bootstrap seed, and separate by about 0.066 under the mean
+in every seed.
+
+Two things follow. Quote the statistic beside the number, because a reader
+cannot recover it from the table. And **do not reimplement this bootstrap.** Call
+`clustered_ci`. Writing a fresh loop is how one pass over these documents came to
+"correct" a table that had been right all along: the loop used a mean, the
+published values were medians, and the disagreement looked like evidence the
+numbers had never come from the CSV.
+
 ---
 
 ## 6. What to send back
