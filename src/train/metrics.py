@@ -105,7 +105,7 @@ def bootstrap_ci(
 
     ON THE SITE TASK A ROW IS NOT AN INDEPENDENT DRAW. One patient supplies up
     to fourteen mandibular sites that share anatomy, field of view, scanner and
-    annotator, so resampling rows treats 6,787 correlated observations as 6,787
+    annotator, so resampling rows treats 6,781 correlated observations as 6,781
     independent ones and returns an interval far narrower than the data
     supports.
 

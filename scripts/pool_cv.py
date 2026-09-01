@@ -222,7 +222,7 @@ def main() -> None:
     log.info("wrote %s", pred_csv)
 
     binary_names = labels[:n_bin]
-    # Cluster the interval on PATIENTS. A pooled row is a site, and 6,787 sites
+    # Cluster the interval on PATIENTS. A pooled row is a site, and 6,781 sites
     # come from 486 patients, so resampling rows would treat fourteen views of
     # one jaw as fourteen independent draws and return an interval far narrower
     # than the data supports. `bootstrap_ci` used to do exactly that while its

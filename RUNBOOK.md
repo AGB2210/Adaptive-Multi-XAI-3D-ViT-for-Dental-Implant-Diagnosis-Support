@@ -234,12 +234,18 @@ This writes `artifacts_sites/sites_toothfairy3.csv`. Sanity-check it:
 python -c "from src.data.site_dataset import load_sites; d=load_sites('artifacts_sites/sites_toothfairy3.csv',targets=['needs_implant','feasible'],jaws=['lower'],methods=['teeth']); n=d[d.needs_implant==1]; print(len(d),'sites',d.patient_id.nunique(),'patients'); print(len(n),'need an implant |',int((n.feasible==0).sum()),'not feasible')"
 ```
 
-**At v3.0.1 that prints:**
+**At v3.0.1 that printed:**
 
 ```
 6787 sites 486 patients
 709 need an implant | 413 not feasible
 ```
+
+**At v3.4.0 the label rules changed deliberately and it prints 6781 sites, 486
+patients, 705 needing an implant.** `measure_site` no longer clamps an
+impossible negative height to 0.0 mm; it returns NaN and the row is dropped as
+unmeasurable, which removes 6 trainable rows. The not-feasible count has not
+been re-recorded against the rebuilt table.
 
 Unlike the test count, this one is worth stopping over. It depends on the
 dataset and on the label rules, not on how much code has been written since,

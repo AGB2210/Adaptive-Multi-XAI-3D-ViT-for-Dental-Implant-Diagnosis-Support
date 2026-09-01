@@ -31,12 +31,12 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Stage | State |
 |---|---|
 | Label builder, arch fitting, site measurement | **Done** — validated against real anatomy |
-| Site labels built | **Done** — 6,787 mandibular sites, 486 patients |
+| Site labels built | **Done** — 6,781 mandibular sites, 486 patients |
 | Native-resolution cache builder, patch dataset, training wiring | **Done** — the full cache is built: 522 volumes, 26.4 GB, ~19 min on the rented box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done.** Randomisation and faithfulness stand; **localisation is withdrawn pending a re-run** — its anatomy masks were cut 7.2 mm from the box the model was shown |
-| Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.954 [0.944, 0.963] over 6,787 sites, each scored once by the model that never saw it |
+| Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
 | Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator is written and never run on real scans |
 | Guide sign-off on clinical thresholds | **Pending** |
 
@@ -91,7 +91,7 @@ broken rather than the problem being hard.
 |---|---|---|---|
 | 128³ @ 1.0 mm | 3.3× blurred | whole head | 532 |
 | 256³ @ 0.5 mm | 1.7× blurred | whole head | 532 |
-| **96³ @ 0.3 mm** | **native** | one tooth site | **6,787** |
+| **96³ @ 0.3 mm** | **native** | one tooth site | **6,781** |
 
 The patch is sharper *and* 19× smaller than the 256³ volume. The structure the
 model must respect is the inferior alveolar canal, 2–3 mm across: at 1.0 mm that

@@ -101,7 +101,7 @@ def build_cv_folds(cfg, patient_ids, y, label_names, n_folds: int, force: bool =
         folds = make_cv_folds(patient_ids, y, n_folds=n_folds, seed=cfg.split.seed)
         # `patient_ids` comes from `patient_label_matrix`, which groups by
         # patient, so its length is a patient count. Recording it as `n_cases`
-        # read as the site count (486 against ~6,787) to anyone sizing the
+        # read as the site count (486 against ~6,781) to anyone sizing the
         # cohort from this file, and was right only while the superseded task
         # had one case per patient.
         save_folds(folds, path, meta={"seed": cfg.split.seed, "n_folds": n_folds,
