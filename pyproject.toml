@@ -7,7 +7,7 @@
 
 [project]
 name = "adaptive-multi-xai-vit"
-version = "3.4.2"
+version = "3.4.3"
 description = "3D Vision Transformer with an adaptive multi-method explainability layer that measures its own faithfulness"
 requires-python = ">=3.11"
 
