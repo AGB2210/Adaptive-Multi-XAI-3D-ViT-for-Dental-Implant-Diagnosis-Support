@@ -48,7 +48,9 @@ jobs:
           python -m pip install --upgrade pip
           # CPU-only torch: CI has no GPU, and the CUDA wheel is ~2.5 GB.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
+          # requirements-app.txt includes requirements.txt, plus the app's server
+          # stack, so the app's tests run beside everything else.
+          pip install -r requirements-app.txt
           # Pinned: the lint rules are pinned in pyproject for a reason, and an
           # unpinned linter reintroduces exactly the drift that pinning prevents.
           pip install 'ruff==0.16.4'

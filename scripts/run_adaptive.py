@@ -149,17 +149,37 @@ def main() -> None:
     # bootstrap. Both counts are written, each under its own name.
     n_cases = len(val_ids)
     n_patients = len(set(patients_of(val_ids)))
+
+    # The gate is fitted here, before anything is written, so its threshold
+    # goes into calibration.json beside the temperature. It used to live only
+    # in this process: the inference app had a temperature to calibrate with
+    # and no validated threshold to route on, and would have had to invent one.
+    val_uncertainty = uncertainty(probs_after, args.uncertainty)
+    gate = ConfidenceGate.fit(val_uncertainty, args.ensemble_fraction)
+
     (art / "calibration").mkdir(parents=True, exist_ok=True)
     reliability_diagram(bins_before, bins_after, ece_before, ece_after,
                         art / "calibration" / "reliability.png",
                         title=f"Validation calibration (n={n_cases} cases from "
                               f"{n_patients} patients x {len(bin_names)} binary labels)")
-    (art / "calibration" / "calibration.json").write_text(json.dumps({
+    calibration = {
         "temperature": temperature, "ece_before": ece_before, "ece_after": ece_after,
         "n_val_cases": n_cases, "n_val_patients": n_patients,
         "fitted_on": "validation split only",
         "calibrated_labels": list(bin_names),
-    }, indent=2), encoding="utf-8")
+        "gate_threshold": gate.threshold,
+        "gate_uncertainty": args.uncertainty,
+        "gate_ensemble_fraction": args.ensemble_fraction,
+        "gate_cheap_method": gate.cheap_method,
+        "checkpoint": str(args.checkpoint),
+    }
+    (art / "calibration" / "calibration.json").write_text(
+        json.dumps(calibration, indent=2), encoding="utf-8")
+    # A second copy BESIDE the checkpoint it was fitted for. A temperature and a
+    # gate belong to one set of weights; the copy under artifacts/ is overwritten
+    # by the next fold's run, and the app reads this one when the .pt is added.
+    (Path(args.checkpoint).parent / "calibration.json").write_text(
+        json.dumps(calibration, indent=2), encoding="utf-8")
 
     print("\n" + "=" * 74)
     print("CALIBRATION (temperature scaling, fitted on VALIDATION only)")
@@ -171,8 +191,7 @@ def main() -> None:
         print("Temperature scaling did not help -- report this; the gate rests on calibrated scores.")
 
     # ---- 2. confidence gate fitted on validation ------------------------
-    val_uncertainty = uncertainty(probs_after, args.uncertainty)
-    gate = ConfidenceGate.fit(val_uncertainty, args.ensemble_fraction)
+    # Fitted above, so the threshold could be written into calibration.json.
     log.info("gate threshold %.4f (escalates ~%.0f%% of validation cases)",
              gate.threshold, 100 * args.ensemble_fraction)
 

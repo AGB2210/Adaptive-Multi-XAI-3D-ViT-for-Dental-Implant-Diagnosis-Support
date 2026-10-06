@@ -1,0 +1,56 @@
+extends: sites.yaml
+
+# ===========================================================================
+# The inference app: python -m app --config configs/app.yaml
+#
+# Everything the app does to a scan is inherited from sites.yaml -- the clip
+# window, the air threshold, the clinical thresholds under `sites:` -- so an
+# uploaded scan is prepared and judged exactly as the training data was. What
+# lives here is only what an interactive tool needs on top.
+#
+# No checkpoint path is set anywhere. Models are added in the browser, and
+# `model:` below is consulted only for a checkpoint too old to carry its own
+# architecture, and then only after the weights have confirmed every field
+# they can.
+# ===========================================================================
+
+app:
+  # Uploaded models and scans, and every result. Ignored by git (artifacts_*/).
+  data_dir: artifacts_app
+  host: 127.0.0.1
+  port: 8000
+  device: auto                 # auto | cuda | cpu
+
+  # The resolution every site model is trained at: ToothFairy3's native 0.3 mm,
+  # never resampled (sites.yaml, preprocess.target_spacing: null). A scan more
+  # than `spacing_tolerance` (relative) away is resampled to it, and says so.
+  spacing_mm: 0.3
+  spacing_tolerance: 0.02
+
+  # Used only when a scan arrives with no mask AND no localiser is loaded.
+  # Measured, not assumed: all 522 ToothFairy3 scans whose anatomy resolves
+  # came out at -1 (sites_toothfairy3.csv, orientation_sign).
+  default_orientation_sign: -1
+
+  # A browser-picked file is not trusted to run code: checkpoints must load
+  # under torch.load(weights_only=True). Turn on only for your own files.
+  allow_unsafe_checkpoints: false
+
+  predict_batch: 8
+  # Display window, in z-scored units, for the slice viewer.
+  window: [-2.0, 4.0]
+
+  xai:
+    # The research settings (sites.yaml `xai:`), because these are the values
+    # whose maps were measured. Lower them for a CPU, never silently: the IG
+    # completeness error and the SHAP standard error are shown with every map.
+    ig_steps: 256
+    ig_batch: 4
+    shap_samples: 200
+    shap_batch: 4
+    fusion_steps: 50
+    # Margin uncertainty -min|p - 0.5| at or above which the full ensemble
+    # runs. USED ONLY when the checkpoint has no calibration.json with a fitted
+    # gate, and every result routed by it says so. -0.25 escalates any site
+    # whose calibrated P(needs implant) is between 0.25 and 0.75.
+    default_gate_threshold: -0.25

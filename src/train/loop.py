@@ -40,6 +40,27 @@ def load_checkpoint_file(path, map_location):
         return torch.load(path, map_location=map_location, weights_only=False)
 
 
+def model_config_of(cfg) -> dict | None:
+    """`cfg.model` as plain data, with the input size the model was built for.
+
+    Plain types only (str, int, float, list), so the checkpoint still opens
+    under `torch.load(weights_only=True)`. `img_size` is resolved the way
+    `runner.model_img_size` does it -- `model.img_size`, else the fixed
+    preprocessing grid -- because a whole-volume config carries the size in
+    `preprocess.out_shape` instead, and it is not imported from there because
+    `runner` imports this module.
+    """
+    model = getattr(cfg, "model", None)
+    if model is None:
+        return None
+    out = {k: v for k, v in vars(model).items()
+           if isinstance(v, (str, int, float, bool, list)) or v is None}
+    if out.get("img_size") is None:
+        shape = getattr(getattr(cfg, "preprocess", None), "out_shape", None)
+        out["img_size"] = int(shape[0]) if shape else None
+    return out
+
+
 def cosine_warmup(step: int, warmup_steps: int, total_steps: int, min_ratio: float = 0.01) -> float:
     """LR multiplier: linear warmup, then cosine decay to min_ratio."""
     if step < warmup_steps:
@@ -305,6 +326,13 @@ class Trainer:
             # millimetres -- every prediction near zero, every MAE near the
             # target's mean, and nothing raises.
             "target_spec": self.spec.state_dict() if self.spec is not None else None,
+            # The architecture travels with the weights for the same reason.
+            # Most of it can be read back off tensor shapes, but `num_heads`
+            # cannot: the qkv projection is (3 * dim, dim) however the heads
+            # split it, so a wrong head count loads cleanly and computes a
+            # different function. A checkpoint that says what it is can be
+            # handed to the inference app without a config beside it.
+            "model_config": model_config_of(self.cfg),
         }
         # Write then rename, so an interrupted save cannot leave a truncated
         # best.pt behind. `scripts/build_cache.py` already does this for cached

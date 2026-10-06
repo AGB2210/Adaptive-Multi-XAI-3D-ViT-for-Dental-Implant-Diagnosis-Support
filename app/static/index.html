@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implant Site Screening</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-title">
+      <span class="product">Implant Site Screening</span>
+      <span class="product-sub">CBCT · mandible · per tooth site</span>
+    </div>
+    <nav class="top-meta">
+      <span id="top-model">No model</span>
+      <span id="device-chip"></span>
+      <span id="version-chip"></span>
+      <button class="link" id="open-models" type="button">Models</button>
+    </nav>
+  </header>
+  <p class="disclaimer" role="note">
+    Screening aid. Flags tooth sites for clinical review; not a diagnosis or a treatment plan.
+    Every measurement is shown with the model's validation error.
+  </p>
+
+  <div class="layout">
+    <aside class="rail">
+      <section class="block">
+        <h2>New scan</h2>
+        <form id="scan-form" class="stack">
+          <label class="pick">
+            <input type="file" name="image" accept=".nii,.gz" required>
+            <span class="pick-btn">Choose scan</span>
+            <span class="pick-name" data-empty="CBCT, .nii or .nii.gz">CBCT, .nii or .nii.gz</span>
+          </label>
+          <label class="pick">
+            <input type="file" name="mask" accept=".nii,.gz">
+            <span class="pick-btn">Choose mask</span>
+            <span class="pick-name" data-empty="Optional segmentation">Optional segmentation</span>
+          </label>
+          <p class="fine">With a mask, sites are located exactly as in training and measured
+            values appear beside each prediction. Without one, a localiser model is required.</p>
+          <button class="btn" type="submit">Analyse</button>
+          <p class="error" id="scan-error" role="alert"></p>
+        </form>
+      </section>
+
+      <section class="block">
+        <h2>Thresholds</h2>
+        <div class="stack">
+          <label class="field"><span>Bone height</span>
+            <input type="number" id="rule-height" min="4" max="30" step="0.5"><i>mm</i></label>
+          <label class="field"><span>Ridge width</span>
+            <input type="number" id="rule-width" min="2" max="15" step="0.5"><i>mm</i></label>
+          <p class="fine">Applied to the predicted millimetres. Changing them re-scores every
+            site immediately; the model does not run again.</p>
+          <button class="link" id="rules-reset" type="button">Reset to configured values</button>
+        </div>
+      </section>
+
+      <section class="block grow">
+        <h2>Scans</h2>
+        <ul id="scan-list" class="scans"></ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="empty" id="empty-state">
+        <h1>No scan open</h1>
+        <ol>
+          <li>Add a site model under <b>Models</b>: the <code>.pt</code>, plus its
+            <code>calibration.json</code> and <code>best_val_metrics.json</code> when available.</li>
+          <li>Choose a CBCT scan in ToothFairy3 format, with its mask if you have it.</li>
+          <li>Select a tooth to read its prediction, then explain it.</li>
+        </ol>
+      </div>
+
+      <div id="scan-view" hidden>
+        <section class="scan-head">
+          <div>
+            <h1 id="scan-title"></h1>
+            <p class="meta" id="scan-meta"></p>
+            <p class="role" id="patient-role"></p>
+          </div>
+          <div class="actions">
+            <button class="link" id="repredict" type="button">Re-run with active model</button>
+            <a class="link" id="download-csv" href="#">Download CSV</a>
+          </div>
+        </section>
+
+        <div class="progress" id="scan-progress" hidden>
+          <div class="track"><span></span></div>
+          <p class="progress-text"></p>
+        </div>
+        <ul class="warnings" id="scan-warnings"></ul>
+
+        <div class="columns">
+          <section class="jaw">
+            <div class="section-head">
+              <h2>Lower jaw</h2>
+              <ul class="legend" id="legend"></ul>
+            </div>
+            <div class="image-frame overview-frame">
+              <canvas id="overview" aria-label="Axial projection of the lower jaw with tooth sites"></canvas>
+            </div>
+            <div class="chart" id="tooth-chart" role="listbox" aria-label="Tooth sites"></div>
+            <p class="fine center" id="chart-caption">Patient's right on the left · FDI 47–41 | 31–37</p>
+          </section>
+
+          <section class="site">
+            <div class="section-head">
+              <h2 id="site-title">Tooth site</h2>
+              <span class="status" id="site-status"></span>
+            </div>
+            <p class="fine" id="site-empty">Select a tooth on the chart or the image.</p>
+            <div id="site-body" hidden>
+              <dl class="figures" id="site-figures"></dl>
+              <ul class="reasons" id="site-reasons"></ul>
+              <p class="fine" id="site-note"></p>
+            </div>
+          </section>
+        </div>
+
+        <section class="viewer" id="viewer-card" hidden>
+          <div class="section-head">
+            <h2>Model input <span class="dim" id="patch-caption"></span></h2>
+            <div class="toolbar">
+              <label>Grey levels <select id="window-select"></select></label>
+              <label>Overlay <select id="overlay-select"><option value="">None</option></select></label>
+              <label>Opacity <input type="range" id="overlay-alpha" min="0" max="100" value="60"></label>
+              <button class="link" id="goto-peak" type="button" disabled>Go to peak</button>
+              <button class="link" id="save-png" type="button">Save PNG</button>
+            </div>
+          </div>
+          <div class="planes image-frame">
+            <figure><canvas id="plane-axial"></canvas><figcaption><span>Axial</span><span id="cap-axial"></span></figcaption></figure>
+            <figure><canvas id="plane-coronal"></canvas><figcaption><span>Coronal</span><span id="cap-coronal"></span></figcaption></figure>
+            <figure><canvas id="plane-sagittal"></canvas><figcaption><span>Sagittal</span><span id="cap-sagittal"></span></figcaption></figure>
+          </div>
+          <p class="fine scale-note"><i id="colorbar"></i> Attribution, low to high. Each map is
+            shown up to its 99th percentile and values under 20% are hidden; this affects the
+            display only.</p>
+
+          <div class="explain">
+            <div class="toolbar left">
+              <label>Explain <select id="explain-target"></select></label>
+              <label class="check"><input type="checkbox" id="explain-force"> Run all four methods</label>
+              <button class="btn" id="explain-run" type="button">Explain</button>
+            </div>
+            <div class="progress" id="explain-progress" hidden>
+              <div class="track"><span></span></div>
+              <p class="progress-text"></p>
+            </div>
+            <div id="explain-result" hidden>
+              <p class="routing" id="explain-routing"></p>
+              <div class="weights" id="explain-weights"></div>
+              <dl class="kv" id="explain-diagnostics"></dl>
+              <ul class="notes" id="explain-notes"></ul>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="models-dialog" aria-labelledby="models-title">
+    <div class="dialog-head">
+      <h1 id="models-title">Models</h1>
+      <form method="dialog"><button class="link" value="close">Close</button></form>
+    </div>
+    <ul id="model-list" class="models"></ul>
+    <form id="model-form" class="stack model-form">
+      <h2>Add a model</h2>
+      <label class="pick">
+        <input type="file" name="files" multiple accept=".pt,.pth,.json,.yaml,.yml" required>
+        <span class="pick-btn">Choose files</span>
+        <span class="pick-name" data-empty="The .pt and any companions">The .pt and any companions</span>
+      </label>
+      <p class="fine">Companions are recognised by name: <code>calibration.json</code> (temperature,
+        confidence gate), <code>best_val_metrics.json</code> (decision threshold, validation error),
+        a <code>.yaml</code> config (only for checkpoints without an embedded architecture), and
+        <code>cv_folds.json</code> (whether a patient was in training).</p>
+      <div class="row">
+        <label class="field col"><span>Kind</span>
+          <select name="kind">
+            <option value="site">Site model</option>
+            <option value="localiser">Site localiser</option>
+          </select></label>
+        <label class="field col"><span>Name</span><input type="text" name="name" placeholder="e.g. Fold 0"></label>
+        <label class="field col"><span>Fold</span><input type="number" name="fold" min="0" max="20" placeholder="auto"></label>
+      </div>
+      <div><button class="btn" type="submit">Validate and add</button></div>
+      <p class="error" id="model-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -52,6 +52,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.implant_sites import superior_sign  # noqa: E402
+from src.data.scan import normalise, prepare_volume  # noqa: E402,F401 - normalise re-exported
 from src.data.taskdef import primary_dataset  # noqa: E402
 from src.utils.config import (  # noqa: E402
     cache_dir,
@@ -111,31 +112,9 @@ def check_settings(out_dir: Path, cfg, force: bool) -> dict:
     return settings
 
 
-def normalise(volume: np.ndarray, clip_window, air_threshold: float):
-    """Fixed-window clip then z-score on foreground. Same contract as before.
-
-    The window is fixed rather than a per-patient percentile for the reason
-    recorded in src/data/preprocess.py: implants are hyperdense and a 99.5th
-    percentile clip flattens them onto cortical bone, erasing the very thing the
-    model has to see.
-    """
-    lo, hi = float(clip_window[0]), float(clip_window[1])
-    volume = np.clip(volume, lo, hi)
-
-    foreground = volume[volume > air_threshold]
-    # Falling back to the whole volume changes what the z-score MEANS for that
-    # scan: it is no longer normalised against tissue but against tissue plus
-    # air, so its intensities are not comparable with the rest of the cohort.
-    # `src/data/preprocess.py` does the same fallback and writes
-    # "z-scored on all voxels (foreground empty)" into its manifest. This path
-    # did it silently, and this is the live one.
-    fell_back = foreground.size < 100
-    if fell_back:
-        foreground = volume
-    mean, std = float(foreground.mean()), float(foreground.std())
-    if std < 1e-6:
-        raise ValueError("zero-variance volume")
-    return ((volume - mean) / std).astype(np.float16), mean, std, fell_back
+# `normalise` lived here until the inference app needed the identical
+# transform. It is now `src.data.scan.normalise`, imported above, so the cache
+# and the app cannot drift apart.
 
 
 def main() -> None:
@@ -204,11 +183,9 @@ def main() -> None:
                     f"image {volume.shape} and mask {mask.shape} disagree; site "
                     f"coordinates are measured on the mask and read from the image"
                 )
-            np.nan_to_num(volume, copy=False, nan=air, posinf=air, neginf=air)
-            if sign == -1:
-                volume = volume[:, :, ::-1]
-
-            out, mean, std, fell_back = normalise(volume, clip_window, air)
+            # Shared with the inference app, so an uploaded scan is prepared
+            # exactly as the training cache was.
+            out, mean, std, fell_back = prepare_volume(volume, sign, clip_window, air)
             if fell_back:
                 log.warning("%s: no foreground above the air threshold -- "
                             "z-scored on all voxels, so this scan's intensities "

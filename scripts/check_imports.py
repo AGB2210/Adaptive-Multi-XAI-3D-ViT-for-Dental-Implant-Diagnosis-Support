@@ -1,4 +1,4 @@
-"""Import every module under src/ and scripts/, so a broken import fails in CI
+"""Import every module under src/, scripts/ and app/, so a broken import fails in CI
 rather than in front of whoever runs it on a GPU box an hour into a session.
 
 The test suite does not reach every module — visualisation and the LIME ablation
@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 def module_names() -> list[str]:
     names = []
-    for package in ("src", "scripts"):
+    for package in ("src", "scripts", "app"):
         for path in sorted((REPO_ROOT / package).rglob("*.py")):
             rel = path.relative_to(REPO_ROOT).with_suffix("")
             names.append(".".join(rel.parts))

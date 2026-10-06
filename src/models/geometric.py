@@ -36,7 +36,7 @@ report that -- it is itself informative about how much of the task is geometry.
 
 The intensity threshold is the one real free parameter, and it is Otsu rather
 than a constant: the cache is z-scored per patient after a fixed HU window
-(`build_site_cache.normalise`), so a fixed cut-off would drift with each
+(`src.data.scan.normalise`), so a fixed cut-off would drift with each
 patient's foreground statistics while Otsu adapts to the patch it is given.
 """
 
