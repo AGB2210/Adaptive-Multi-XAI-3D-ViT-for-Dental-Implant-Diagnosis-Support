@@ -43,7 +43,6 @@ def main() -> None:
     ap.add_argument("--config", default="configs/localiser.yaml")
     ap.add_argument("--fold", type=int, required=True)
     ap.add_argument("--epochs", type=int, default=None)
-    ap.add_argument("--limit", type=int, default=0, help="smoke-test only: patients per split")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -51,7 +50,7 @@ def main() -> None:
     loc = cfg.localiser
     set_seed(cfg.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    lcfg, data = localiser_datasets(cfg, args.fold, args.limit)
+    lcfg, data = localiser_datasets(cfg, args.fold)
     log.info("fold %d: %d train, %d val patients | device %s", args.fold,
              len(data["train"]), len(data["val"]), device)
 

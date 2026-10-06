@@ -22,8 +22,6 @@ import time
 import uuid
 from pathlib import Path
 
-import torch
-
 from app.settings import Settings
 from src.data.splits import fold_assignment, load_folds
 from src.inference.checkpoint import CheckpointError, load_bundle
@@ -69,6 +67,7 @@ class ModelRegistry:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._loaded: dict[str, object] = {}
+        self._model_locks: dict[str, threading.RLock] = {}
 
     # ---- listing --------------------------------------------------------
     def _meta_path(self, model_id: str) -> Path:
@@ -135,7 +134,11 @@ class ModelRegistry:
         try:
             for role, (_, path) in roles.items():
                 shutil.copyfile(path, target / ROLE_NAMES[role])
-            description = self._validate(kind, target)
+            # Validated by loading it, on the device it will run on -- and the
+            # loaded model is kept, so the first scan does not load it again.
+            loaded = self._load_from(kind, target)
+            description = (loaded.describe(self.settings.spacing_mm) if kind == "site"
+                           else loaded.describe())
             if fold is None:
                 fold = fold_from_checkpoint(original)
             meta = {
@@ -153,28 +156,29 @@ class ModelRegistry:
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
             raise
+        with self._lock:
+            self._loaded[model_id] = loaded
         if self.active(kind) is None:
             self.activate(model_id)
         meta["active"] = self.active(kind)["id"] == model_id
         return meta
 
-    def _validate(self, kind: str, directory: Path) -> dict:
-        """Load the model on the CPU; anything that cannot be loaded is refused."""
+    def _load_from(self, kind: str, directory: Path):
+        """Load one model onto the configured device; whatever cannot load is refused."""
         if kind == "site":
-            bundle = load_bundle(
-                directory / ROLE_NAMES["checkpoint"], torch.device("cpu"),
-                fallback_config=self.settings.config_path,
-                allow_unsafe=self.settings.allow_unsafe_checkpoints)
-            return bundle.describe(self.settings.spacing_mm)
+            return load_bundle(directory / ROLE_NAMES["checkpoint"], self.settings.device,
+                               fallback_config=self.settings.config_path,
+                               allow_unsafe=self.settings.allow_unsafe_checkpoints)
         from src.models.localiser import load_localiser
-        return load_localiser(directory / ROLE_NAMES["checkpoint"], torch.device("cpu"),
-                              allow_unsafe=self.settings.allow_unsafe_checkpoints).describe()
+        return load_localiser(directory / ROLE_NAMES["checkpoint"], self.settings.device,
+                              allow_unsafe=self.settings.allow_unsafe_checkpoints)
 
     def remove(self, model_id: str) -> None:
         if self.get(model_id) is None:
             raise KeyError(model_id)
         with self._lock:
             self._loaded.pop(model_id, None)
+            self._model_locks.pop(model_id, None)
             active = self._active()
             for kind, mid in list(active.items()):
                 if mid == model_id:
@@ -184,32 +188,30 @@ class ModelRegistry:
 
     # ---- loading for inference -----------------------------------------
     def load(self, model_id: str):
-        """The model on the configured device, loaded once and kept."""
+        """The model on the configured device. Loaded once and kept until removed:
+        switching between models, or explaining a scan an earlier model analysed,
+        never reloads one."""
+        with self.lock(model_id):
+            with self._lock:
+                if model_id in self._loaded:
+                    return self._loaded[model_id]
+            meta = self.get(model_id)
+            if meta is None:
+                raise KeyError(model_id)
+            obj = self._load_from(meta["kind"], self.root / model_id)
+            with self._lock:
+                self._loaded[model_id] = obj
+            return obj
+
+    def lock(self, model_id: str) -> threading.RLock:
+        """Held while a model runs. Jobs are concurrent, but ONE MODEL OBJECT is
+        not re-entrant: attention rollout switches its attention capture on and
+        off, Grad-CAM registers hooks on its blocks, and every attribution method
+        clears its gradients. Two jobs inside the same model would read each
+        other's activations, and a prediction made mid-rollout would overwrite
+        the attention it is composing. Different models do not share a lock."""
         with self._lock:
-            if model_id in self._loaded:
-                return self._loaded[model_id]
-        meta = self.get(model_id)
-        if meta is None:
-            raise KeyError(model_id)
-        directory = self.root / model_id
-        if meta["kind"] == "site":
-            obj = load_bundle(directory / ROLE_NAMES["checkpoint"], self.settings.device,
-                              fallback_config=self.settings.config_path,
-                              allow_unsafe=self.settings.allow_unsafe_checkpoints)
-        else:
-            from src.models.localiser import load_localiser
-            obj = load_localiser(directory / ROLE_NAMES["checkpoint"], self.settings.device,
-                                 allow_unsafe=self.settings.allow_unsafe_checkpoints)
-        with self._lock:
-            # One model of each kind resident: the previous one's memory is
-            # released rather than accumulating across every model tried.
-            for other in [k for k in self._loaded if self.get(k) and
-                          self.get(k)["kind"] == meta["kind"]]:
-                self._loaded.pop(other)
-            self._loaded[model_id] = obj
-        if self.settings.device.type == "cuda":
-            torch.cuda.empty_cache()
-        return obj
+            return self._model_locks.setdefault(model_id, threading.RLock())
 
     def patient_role(self, model_id: str, patient_id: str) -> dict:
         """Was this patient in the model's training data? Only answerable with folds."""

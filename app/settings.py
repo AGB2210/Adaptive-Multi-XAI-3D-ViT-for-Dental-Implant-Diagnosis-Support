@@ -28,7 +28,6 @@ class Settings:
     spacing_tolerance: float
     default_orientation_sign: int
     allow_unsafe_checkpoints: bool
-    predict_batch: int
     window: tuple[float, float]
     clip_window: tuple[float, float]
     air_threshold: float
@@ -81,7 +80,6 @@ def load_settings(config_path: str | Path | None = None, **overrides) -> Setting
         spacing_tolerance=float(app.spacing_tolerance),
         default_orientation_sign=int(app.default_orientation_sign),
         allow_unsafe_checkpoints=bool(getattr(app, "allow_unsafe_checkpoints", False)),
-        predict_batch=int(getattr(app, "predict_batch", 8)),
         window=tuple(float(v) for v in getattr(app, "window", (-2.0, 4.0))),
         clip_window=tuple(float(v) for v in cfg.preprocess.clip_window),
         air_threshold=float(getattr(cfg.preprocess, "air_threshold", -500.0)),

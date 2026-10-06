@@ -98,7 +98,7 @@ def summarise(pred: dict, factor: int, spacing_mm: float) -> dict:
     }
 
 
-def localiser_datasets(cfg, fold: int, limit: int = 0):
+def localiser_datasets(cfg, fold: int):
     """(LocaliserConfig, {train, val, test} datasets) for one CV round of `cv_folds.json`."""
     loc = cfg.localiser
     lcfg = LocaliserConfig(factor=loc.factor, input_shape=tuple(loc.input_shape),
@@ -113,8 +113,7 @@ def localiser_datasets(cfg, fold: int, limit: int = 0):
                   teeth=lcfg.sites, factor=lcfg.factor, methods=methods)
     out = {}
     for name in ("train", "val", "test"):
-        patients = split[name][:limit] if limit else split[name]
-        out[name] = LocaliserDataset(patients=patients, augment=(name == "train"),
+        out[name] = LocaliserDataset(patients=split[name], augment=(name == "train"),
                                      flip_prob=float(loc.flip_prob),
                                      translate=int(loc.translate_voxels), seed=cfg.seed, **common)
         if out[name].missing:

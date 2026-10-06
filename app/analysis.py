@@ -137,7 +137,8 @@ def predict(settings: Settings, registry: ModelRegistry, store: ScanStore, scan_
     volume = store.load_array(scan_id, "volume.npy")
     sites = [{k: v for k, v in s.items() if k not in ("prediction", "verdict")}
              for s in result["sites"]]
-    sites = predict_sites(bundle, volume, sites, batch_size=settings.predict_batch)
+    with registry.lock(site_model["id"]):      # see ModelRegistry.lock
+        sites = predict_sites(bundle, volume, sites)
 
     result["sites"] = sites
     result["model"] = {"id": site_model["id"], "name": site_model["name"],
@@ -184,9 +185,10 @@ def explain(settings: Settings, registry: ModelRegistry, store: ScanStore, scan_
 
     volume = store.load_array(scan_id, "volume.npy")
     patch = as_input(site_patch(volume, site, bundle.img_size), bundle.device)
-    out = explain_patch(bundle, patch, bundle.names.index(target),
-                        site["prediction"]["logits"], settings.xai,
-                        force_ensemble=force, progress=progress)
+    with registry.lock(model_id):              # see ModelRegistry.lock
+        out = explain_patch(bundle, patch, bundle.names.index(target),
+                            site["prediction"]["logits"], settings.xai,
+                            force_ensemble=force, progress=progress)
 
     key = explain_key(tooth, target, force)
     folder = store.explain_dir(scan_id, key)

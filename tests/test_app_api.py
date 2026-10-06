@@ -260,3 +260,70 @@ class TestExplanations:
         client.app_state.jobs.join()
         job = client.get(f"/api/jobs/{res.json()['job']['id']}").json()
         assert job["status"] == "failed" and "feasible" in job["error"]
+
+
+class TestJobsRunTogether:
+    """Jobs are concurrent. What still runs one at a time does so for
+    correctness -- one scan's files, one model's hooks -- never for load."""
+
+    def test_two_jobs_are_inside_the_pool_at_the_same_time(self):
+        """A barrier only two threads can pass together: one worker would time out."""
+        import threading
+
+        from app.jobs import JobQueue
+
+        queue, barrier = JobQueue(), threading.Barrier(2, timeout=10)
+        jobs = [queue.submit("wait", f"scan-{i}", lambda progress: barrier.wait() or {})
+                for i in range(2)]
+        queue.join()
+        assert [queue.get(j.id).status for j in jobs] == ["done", "done"], \
+            [queue.get(j.id).error for j in jobs]
+
+    def test_jobs_on_one_scan_do_not_overlap(self):
+        """They write the same files: a re-prediction clears explanations."""
+        import threading
+        import time
+
+        from app.jobs import JobQueue
+
+        queue, inside, overlaps = JobQueue(), threading.Semaphore(1), []
+
+        def work(progress):
+            overlaps.append(not inside.acquire(blocking=False))
+            time.sleep(0.05)
+            inside.release()
+            return {}
+
+        for _ in range(4):
+            queue.submit("write", "same-scan", work)
+        queue.join()
+        assert overlaps == [False] * 4
+
+    def test_two_scans_are_analysed_side_by_side(self, client, files):
+        assert add_model(client, files["ckpt"], files["metrics"]).status_code == 201
+        first = upload(client, files["image"], files["mask"]).json()
+        second = upload(client, files["image"], files["mask"]).json()
+        client.app_state.jobs.join()
+        for res in (first, second):
+            assert client.get(f"/api/jobs/{res['job']['id']}").json()["status"] == "done"
+            sites = client.get(f"/api/scans/{res['scan']['id']}").json()["result"]["sites"]
+            assert len(sites) == 14 and all(s["prediction"] for s in sites)
+
+    def test_every_added_model_stays_loaded(self, client, files, tmp_path):
+        """Switching models, or explaining a scan an earlier model analysed,
+        must not reload one -- and adding a model already loads it."""
+        a = add_model(client, files["ckpt"], name="a").json()["id"]
+        b = add_model(client, write_tiny_checkpoint(tmp_path / "b" / "b.pt", seed=1), name="b").json()["id"]
+        registry = client.app_state.registry
+        assert {a, b} <= set(registry._loaded)
+        first = registry.load(a)
+        client.post(f"/api/models/{b}/activate")
+        registry.load(b)
+        assert registry.load(a) is first
+
+    def test_a_model_has_one_lock_and_models_do_not_share_it(self, client, files, tmp_path):
+        a = add_model(client, files["ckpt"], name="a").json()["id"]
+        b = add_model(client, write_tiny_checkpoint(tmp_path / "b" / "b.pt", seed=1), name="b").json()["id"]
+        registry = client.app_state.registry
+        assert registry.lock(a) is registry.lock(a)
+        assert registry.lock(a) is not registry.lock(b)

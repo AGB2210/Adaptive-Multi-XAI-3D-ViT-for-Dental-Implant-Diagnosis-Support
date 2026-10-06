@@ -46,8 +46,6 @@ log = get_logger("localiser_cache")
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/localiser.yaml")
-    ap.add_argument("--limit", type=int, default=0,
-                    help="smoke-test only: the first N patients alphabetically, which is not a sample")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
@@ -58,8 +56,6 @@ def main() -> None:
     signs = (sites.dropna(subset=["orientation_sign"]).groupby("patient_id")["orientation_sign"]
              .first().astype(int))
     patients = sorted(signs.index)
-    if args.limit:
-        patients = patients[: args.limit]
 
     out_dir = Path(loc.cache_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -125,7 +125,6 @@ def main() -> None:
     ap.add_argument("--site-checkpoint", dest="site_checkpoint", default=None,
                     help="a site model of the SAME fold, for the end-to-end cost")
     ap.add_argument("--split", default="test")
-    ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -135,7 +134,7 @@ def main() -> None:
     fold = localiser.meta.get("fold")
     if fold is None:
         raise SystemExit("the checkpoint records no fold, so its held-out patients are unknown")
-    lcfg, data = localiser_datasets(cfg, int(fold), args.limit)
+    lcfg, data = localiser_datasets(cfg, int(fold))
     data = data[args.split]
     sites = pd.read_csv(artifacts_dir(cfg) / cfg.task.sites_csv, dtype={"patient_id": str})
     split = fold_assignment(load_folds(artifacts_dir(cfg) / "cv_folds.json"), int(fold))

@@ -1,17 +1,28 @@
-"""One worker, one queue.
+"""Background jobs, run concurrently.
 
-Everything that touches the model runs here, one job at a time: a single GPU
-shared by two concurrent attributions is slower than running them in turn, and
-with one model resident there is nothing to race on.
+Jobs go to a thread pool and run side by side: two uploaded scans are read,
+normalised and located at the same time. Nothing here is sized for a machine.
+
+Two things still run one at a time, and both are about CORRECTNESS, not load:
+
+  per subject  Jobs on the same scan take that scan's lock, because they write
+               the same files -- a re-prediction clears the explanations an
+               explain job is in the middle of writing.
+  per model    Held by `ModelRegistry.lock`, not here: the attribution methods
+               register hooks on a model's blocks and switch its attention
+               capture on and off, so two of them on one model object would
+               read each other's activations.
 """
 
 from __future__ import annotations
 
-import queue
 import threading
 import time
 import traceback
 import uuid
+from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_all
 from dataclasses import dataclass, field
 
 from src.utils.log import get_logger
@@ -25,7 +36,7 @@ class Job:
     kind: str
     subject: str
     status: str = "queued"           # queued | running | done | failed
-    message: str = "Waiting for the worker"
+    message: str = "Queued"
     progress: float = 0.0
     error: str | None = None
     result: dict | None = None
@@ -40,19 +51,21 @@ class Job:
 
 
 class JobQueue:
-    def __init__(self):
+    def __init__(self, workers: int | None = None):
+        # None lets the executor pick its own default from the CPU count.
+        self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="app-job")
         self._jobs: dict[str, Job] = {}
-        self._queue: queue.Queue = queue.Queue()
+        self._futures: list[Future] = []
+        self._subject_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
         self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._run, name="app-worker", daemon=True)
-        self._thread.start()
 
     def submit(self, kind: str, subject: str, fn) -> Job:
-        """Queue `fn(progress)`; `progress(message, fraction)` reports back."""
+        """Run `fn(progress)` in the pool; `progress(message, fraction)` reports back."""
         job = Job(id=uuid.uuid4().hex[:12], kind=kind, subject=subject)
         with self._lock:
             self._jobs[job.id] = job
-        self._queue.put((job, fn))
+            subject_lock = self._subject_locks[subject]
+            self._futures.append(self._pool.submit(self._run, job, fn, subject_lock))
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -64,14 +77,12 @@ class JobQueue:
             return [j for j in self._jobs.values()
                     if j.subject == subject and j.status in ("queued", "running")]
 
-    def _run(self) -> None:
-        while True:
-            job, fn = self._queue.get()
+    def _run(self, job: Job, fn, subject_lock: threading.Lock) -> None:
+        def progress(message: str, fraction: float) -> None:
+            job.message = message
+            job.progress = max(0.0, min(1.0, float(fraction)))
 
-            def progress(message: str, fraction: float, _job=job) -> None:
-                _job.message = message
-                _job.progress = max(0.0, min(1.0, float(fraction)))
-
+        with subject_lock:
             job.status, job.message = "running", "Starting"
             try:
                 job.result = fn(progress)
@@ -82,8 +93,9 @@ class JobQueue:
                 job.message = "Failed"
             finally:
                 job.finished = time.time()
-                self._queue.task_done()
 
     def join(self) -> None:
-        """Block until every queued job has finished. For tests."""
-        self._queue.join()
+        """Block until every submitted job has finished. For tests."""
+        with self._lock:
+            pending = list(self._futures)
+        wait_all(pending)

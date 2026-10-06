@@ -122,6 +122,16 @@ are `patch_centre` / `cut_patch`; outputs go through `to_report_units`;
 feasibility is `derived_feasible`; the gate and fusion are `src/xai/adaptive`.
 `tests/test_inference.py` pins each of those seams.
 
+**Nothing in the app is sized for a machine.** Jobs run concurrently, every
+site of a scan is predicted in one forward pass, and every model added stays
+loaded on the device until it is removed. Two things still run one at a time,
+and both are correctness rules: jobs on the *same scan* (they write the same
+files), and work inside the *same model* (the attribution methods hook its
+blocks and switch its attention capture on and off, so two of them in one model
+object would read each other's activations). The XAI step counts and batch
+sizes in `configs/app.yaml` are the research scripts' own, because those are
+the settings the maps were measured at.
+
 Checkpoints written by `train.py` now carry their architecture
 (`model_config`). Older ones lack it, and `num_heads` cannot be read off the
 weights, so for those the app takes it from a config and checks every other

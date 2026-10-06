@@ -36,14 +36,15 @@ app:
   # under torch.load(weights_only=True). Turn on only for your own files.
   allow_unsafe_checkpoints: false
 
-  predict_batch: 8
   # Display window, in z-scored units, for the slice viewer.
   window: [-2.0, 4.0]
 
   xai:
-    # The research settings (sites.yaml `xai:`), because these are the values
-    # whose maps were measured. Lower them for a CPU, never silently: the IG
-    # completeness error and the SHAP standard error are shown with every map.
+    # The research settings: steps and samples from sites.yaml `xai:`, batch
+    # sizes from run_faithfulness.py. GradientSHAP draws its baselines and noise
+    # per batch, so its batch size is part of what makes a map reproduce the
+    # measured ones, not a memory knob. The IG completeness error and the SHAP
+    # standard error are shown with every map.
     ig_steps: 256
     ig_batch: 4
     shap_samples: 200

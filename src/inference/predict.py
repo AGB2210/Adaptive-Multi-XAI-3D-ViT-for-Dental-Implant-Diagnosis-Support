@@ -39,16 +39,20 @@ def as_input(patch: np.ndarray, device: torch.device) -> torch.Tensor:
 
 
 @torch.no_grad()
-def predict_sites(bundle: ModelBundle, volume: np.ndarray, sites: list[dict],
-                  batch_size: int = 8) -> list[dict]:
-    """Outputs for every site that has a position, in each head's own unit."""
+def predict_sites(bundle: ModelBundle, volume: np.ndarray, sites: list[dict]) -> list[dict]:
+    """Outputs for every site that has a position, in each head's own unit.
+
+    One forward pass over all of a scan's sites. The model normalises with
+    GroupNorm and LayerNorm in eval mode, so a site's output does not depend on
+    which other sites share its batch.
+    """
     todo = [s for s in sites if has_position(s)]
-    logits = []
-    for start in range(0, len(todo), batch_size):
+    if todo:
         batch = torch.cat([as_input(site_patch(volume, s, bundle.img_size), bundle.device)
-                           for s in todo[start:start + batch_size]])
-        logits.append(bundle.model(batch).float().cpu().numpy())
-    raw = np.concatenate(logits) if logits else np.zeros((0, len(bundle.names)))
+                           for s in todo])
+        raw = bundle.model(batch).float().cpu().numpy()
+    else:
+        raw = np.zeros((0, len(bundle.names)))
     report = to_report_units(raw, bundle.spec, bundle.temperature)
 
     n_bin = bundle.n_binary
