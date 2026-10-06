@@ -427,6 +427,34 @@ row of `results_faithfulness.csv`, so two runs can never be confused.
 Run the default settings too, and report both. If the spread stays at 0.013 with
 a mean baseline, the null result is real and belongs in the paper.
 
+### 4f. The site localiser — for the app's image-only path
+
+The site model is measured on mask-derived positions. A scan with no mask needs
+the localiser to find its sites, and the localiser is a model in its own right,
+trained on the **same folds**:
+
+```bash
+python scripts/build_localiser_cache.py --config configs/localiser.yaml
+```
+
+Reads the site cache from 4b, so it takes minutes; under a gigabyte for the
+whole cohort at 1.2 mm.
+
+```bash
+for k in 0 1 2 3 4; do python scripts/train_localiser.py --config configs/localiser.yaml --fold $k; done
+```
+
+```bash
+for k in 0 1 2 3 4; do python scripts/eval_localiser.py --config configs/localiser.yaml --checkpoint artifacts_sites/localiser_runs/cv_fold$k/best.pt --site-checkpoint artifacts_sites/runs/cv_fold$k/best.pt; done
+```
+
+The evaluation pairs each localiser with the site model **of the same fold**, so
+both have never seen the test patients. Read two lines: the median 3D position
+error with its patient-clustered interval, and the end-to-end table -- the site
+model's height and width MAE from mask-placed patches against localiser-placed
+ones. The second is the cost of running without a segmentation, and it is the
+number to quote beside any image-only result.
+
 ### Anything produced before v3.1.0 has to be re-run
 
 Three scripts converted model outputs with a bare `sigmoid` across the whole
@@ -539,9 +567,23 @@ into a row bootstrap and cost a published claim. `REPORT.md` C8j has the story.
 head -2 artifacts_sites/results_randomization.csv
 ```
 
-A few hundred MB in total. **Leave the `.pt` checkpoints and `cache/` behind**
-unless asked — they are many gigabytes, and both are reproducible from the
-files above.
+A few hundred MB in total. **Leave `cache/` behind** — it is many gigabytes and
+reproducible from the files above.
+
+**Bring back the checkpoints the app runs on**, each with its companions -- the
+app reads them by name from the same folder:
+
+```
+artifacts_sites/runs/cv_fold*/best.pt                 ~70 MB each
+artifacts_sites/runs/cv_fold*/best_val_metrics.json   decision threshold, validation MAE
+artifacts_sites/runs/cv_fold*/calibration.json        temperature and gate (run_adaptive.py)
+artifacts_sites/cv_folds.json                         which patients each fold trained on
+artifacts_sites/localiser_runs/cv_fold*/best.pt       and eval_*.json beside each
+```
+
+`calibration.json` is written beside a checkpoint only for the fold
+`run_adaptive.py` was run on. A checkpoint without one still works in the app,
+and says on every result that it is uncalibrated and gated by a default.
 
 ---
 

@@ -233,7 +233,13 @@ function renderModelList() {
       `${(d.outputs || []).map((o) => o.name).join(", ")}`,
       `${a.depth} blocks × ${a.num_heads} heads, width ${a.embed_dim}, patch ${a.patch_size} · ${d.patch_mm} mm input, ${d.tokens} tokens at ${d.mm_per_token} mm`,
       `Architecture ${d.architecture_source}${d.epoch !== null && d.epoch !== undefined ? ` · epoch ${d.epoch}` : ""}${m.fold !== null && m.fold !== undefined ? ` · fold ${m.fold}` : ""}${m.has_folds ? " · fold partition known" : ""}`,
-    ] : [JSON.stringify(d)];
+    ] : [
+      `Lower-jaw sites ${(d.sites || []).join(", ")}`,
+      `${d.grid_mm} mm grid ${(d.input_shape || []).join(" × ")} · ${(d.n_params / 1e6).toFixed(2)}M params${d.epoch !== null && d.epoch !== undefined ? ` · epoch ${d.epoch}` : ""}${d.fold !== null && d.fold !== undefined ? ` · fold ${d.fold}` : ""}`,
+      d.validation && d.validation.median_error_mm
+        ? `Validation: median position error ${fmt(d.validation.median_error_mm)} mm${d.validation.orientation_accuracy !== undefined ? `, orientation ${fmt(d.validation.orientation_accuracy * 100, 1)}% correct` : ""}`
+        : "No validation numbers in this checkpoint",
+    ];
     return el("li", {},
       el("div", {},
         el("div", { class: "name" }, m.name,
@@ -586,6 +592,9 @@ function renderSiteCard(site) {
   $("site-figures").replaceChildren(...figs);
   $("site-reasons").replaceChildren(...(v.reasons || []).map((r) => el("li", {}, r)));
   const notes = [];
+  if (site.source === "localiser") {
+    notes.push(`Position from the localiser model (heatmap spread ± ${fmt(site.position_sd_mm)} mm), not from a segmentation, so no measured values are available.`);
+  }
   if (site.note) notes.push(site.note.charAt(0).toUpperCase() + site.note.slice(1) + ".");
   if (truth && truth.limiting_structure) notes.push(`Mask: height limited by ${truth.limiting_structure.replace("_", " ")}.`);
   $("site-note").textContent = notes.join(" ");

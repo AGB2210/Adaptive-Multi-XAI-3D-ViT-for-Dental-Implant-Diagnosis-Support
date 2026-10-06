@@ -1,0 +1,39 @@
+extends: sites.yaml
+
+# ===========================================================================
+# The site localiser: finds the 14 lower-jaw sites on a scan with no mask.
+#
+#   python scripts/build_localiser_cache.py --config configs/localiser.yaml
+#   python scripts/train_localiser.py       --config configs/localiser.yaml --fold 0
+#   python scripts/eval_localiser.py        --config configs/localiser.yaml \
+#       --checkpoint artifacts_sites/localiser_runs/cv_fold0/best.pt \
+#       --site-checkpoint artifacts_sites/runs/cv_fold0/best.pt
+#
+# Same patients, same cv_folds.json, as the site model: a localiser for fold k
+# must never have seen fold k's test patients, or the end-to-end error measured
+# on them is optimistic in exactly the way the per-site split prevents.
+# ===========================================================================
+
+localiser:
+  cache_dir: artifacts_sites/localiser_cache
+  out_dir: artifacts_sites/localiser_runs
+  # 0.3 mm x 4 = 1.2 mm. Every ToothFairy3 scan is at most 512 x 512 x 298
+  # voxels (measured over all 532), so 128 x 128 x 80 holds each one whole.
+  factor: 4
+  input_shape: [128, 128, 80]
+  channels: [16, 32, 64, 128]
+  # All tiers: the edentulous patients are 30.7% of missing sites and reachable
+  # only through the weaker tiers. Their positions are extrapolations, and the
+  # evaluation reports error per tier so that is visible.
+  site_methods: [teeth, sparse, opposite_jaw]
+  epochs: 80
+  batch_size: 4
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  # Weight on the heatmap spread (mm). Without it the spread stays wide even
+  # where the position is right, and reports nothing; see localiser_loss.
+  spread_weight: 0.05
+  flip_prob: 0.5
+  translate_voxels: 6
+  early_stop_patience: 15
+  num_workers: 4

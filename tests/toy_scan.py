@@ -18,6 +18,7 @@ import torch
 
 from src.data.dental_arch import LOWER_ARCH
 from src.data.implant_sites import IAC, LOWER_JAW, UPPER_JAW
+from src.models.localiser import LocaliserConfig, SiteLocaliser
 from src.models.vit3d import ViT3D
 from src.train.targets import TargetSpec
 
@@ -111,4 +112,20 @@ def write_tiny_checkpoint(path: Path, embed_config: bool = True, seed: int = 0,
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, path)
+    return path
+
+
+SMALL_LOCALISER = dict(factor=4, input_shape=(32, 32, 24), channels=(4, 8, 8, 8))
+
+
+def write_tiny_localiser(path, seed: int = 0, **cfg) -> Path:
+    """An untrained localiser small enough for the toy scan's 25 x 25 x 17 grid."""
+    torch.manual_seed(seed)
+    config = LocaliserConfig(**{**SMALL_LOCALISER, **cfg})
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"kind": "localiser", "epoch": 1, "fold": 0,
+                "model": SiteLocaliser(config).state_dict(),
+                "localiser_config": config.to_dict(),
+                "val": {"median_error_mm": 2.5}}, path)
     return path

@@ -85,6 +85,48 @@ Run the synthetic gate first. It plants a bright blob at a known site per label
 — a task the model must be able to learn — so a failure there means the code is
 broken rather than the problem being hard.
 
+## The app
+
+A browser app that does what the model is for, on one scan at a time:
+
+```bash
+pip install -r requirements-app.txt
+python -m app --config configs/app.yaml        # http://127.0.0.1:8000
+```
+
+1. **Models** — pick a site model's `.pt` in the browser, with any of its
+   companions: `calibration.json` (temperature and the fitted confidence gate,
+   written beside the checkpoint by `run_adaptive.py`), `best_val_metrics.json`
+   (decision threshold and validation MAE), `cv_folds.json` (whether a patient
+   was in that model's training data). No path is configured anywhere. A file
+   is loaded and checked before it is kept, and refused with a reason if its
+   architecture, heads or units do not add up.
+2. **Scan** — a ToothFairy3-format CBCT (`.nii` / `.nii.gz`), with its mask if
+   there is one. With a mask, sites are located and measured by the label
+   builder's own `score_one`, and the measured values appear beside each
+   prediction. Without one, a trained site localiser finds them (below).
+3. **Result** — the fourteen lower sites on an axial projection and a tooth
+   chart, each judged *no implant needed / feasible / not feasible / borderline*.
+   Borderline means the prediction is within the model's own validation error of
+   a threshold. Changing a threshold re-scores every site at once, because
+   feasibility is a rule on the predicted millimetres, not a model output.
+4. **Explain** — the adaptive layer on one site: the confidence gate routes it
+   to attention rollout alone or to all four methods with agreement-weighted
+   fusion, and the fusion weights, IG completeness error and SHAP standard
+   error are shown with the maps.
+
+**Nothing in the app is a second implementation.** An uploaded scan is prepared
+by `src/data/scan.prepare_volume`, the function `build_site_cache.py` writes the
+training cache with, and comes out byte-identical to the cached volume; patches
+are `patch_centre` / `cut_patch`; outputs go through `to_report_units`;
+feasibility is `derived_feasible`; the gate and fusion are `src/xai/adaptive`.
+`tests/test_inference.py` pins each of those seams.
+
+Checkpoints written by `train.py` now carry their architecture
+(`model_config`). Older ones lack it, and `num_heads` cannot be read off the
+weights, so for those the app takes it from a config and checks every other
+field against the tensor shapes.
+
 ## Why patches, not whole heads
 
 |  | detail | field of view | samples |
@@ -260,14 +302,21 @@ src/data/      preprocessing, caches, augmentation, splits
                implant_sites  bone height / ridge width / nerve clearance, in mm
                dental_arch    where a tooth site is when the tooth is gone
                site_dataset   one sample per site, patches at native resolution
+               scan           scan -> model-frame volume (cache build AND app)
+               site_scoring   every site of one scan, from its mask
 src/models/    vit3d (from scratch), cnn3d baseline (one fold, not pursued),
-               geometric (threshold-and-measure baseline, CPU only)
-src/train/     training loop, metrics with bootstrap CIs
+               geometric (threshold-and-measure baseline, CPU only),
+               localiser (finds the lower sites on a scan with no mask)
+src/train/     training loop, metrics with bootstrap CIs, localiser metrics
 src/xai/       rollout, IG, GradientSHAP, Grad-CAM, LIME (ablation only),
                faithfulness, localisation, calibration, adaptive fusion
+src/inference/ the app's path: checkpoint loading, scan preparation, sites,
+               prediction and verdicts, explanation
+app/           FastAPI server and the browser page (python -m app)
 scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_xai, run_faithfulness, run_localization, run_adaptive,
-               run_geometric_baseline, pool_cv, make_figures
+               run_geometric_baseline, pool_cv, make_figures,
+               build_localiser_cache, train_localiser, eval_localiser
 ```
 
 ### The superseded detection pipeline
@@ -356,9 +405,18 @@ two documents that also carry the caveats they must be read with.
 ## Known limitation
 
 Site positions are fitted to the ground-truth masks. That is legitimate for
-training and for measuring this model, and it is **not a deployable pipeline** —
-a new patient arrives with an image and no segmentation. A fielded system needs
-a site-detection step that does not exist here.
+training and for measuring this model, and on its own it is **not a deployable
+pipeline** — a new patient arrives with an image and no segmentation.
+
+`src/models/localiser.py` is the site-detection step that was missing: a 3D
+U-Net predicting the fourteen lower sites, their in-view status and the scan's
+orientation from the image alone, trained on the same folds as the site model
+(RUNBOOK 4f). **It has not been trained on the cohort yet, so it has no measured
+error.** Until `eval_localiser.py` has run, the image-only path in the app is
+built and tested but unmeasured, and the mask path is the one to quote. Its
+evaluation reports the number that matters: how much the site model's height
+and width error grows when its patches are placed by the localiser instead of
+the mask.
 
 ## CI
 

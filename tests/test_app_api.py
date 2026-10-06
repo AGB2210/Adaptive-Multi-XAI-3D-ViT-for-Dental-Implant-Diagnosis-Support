@@ -22,7 +22,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.server import create_app  # noqa: E402
 from app.settings import load_settings  # noqa: E402
-from tests.toy_scan import MISSING, write_tiny_checkpoint, write_toy_scan  # noqa: E402
+from tests.toy_scan import (  # noqa: E402
+    MISSING,
+    write_tiny_checkpoint,
+    write_tiny_localiser,
+    write_toy_scan,
+)
 
 TINY_XAI = {"ig_steps": 4, "ig_batch": 2, "shap_samples": 2, "shap_batch": 2,
             "fusion_steps": 4, "default_gate_threshold": -0.25}
@@ -178,6 +183,33 @@ class TestAnalysis:
         job = client.get(f"/api/jobs/{res.json()['job']['id']}").json()
         assert job["status"] == "failed"
         assert "mask" in job["error"] and "localiser" in job["error"]
+
+    def test_without_a_mask_the_localiser_finds_the_sites(self, client, files, tmp_path):
+        """The image-only path: a localiser model, no segmentation."""
+        assert add_model(client, files["ckpt"]).status_code == 201
+        loc = write_tiny_localiser(tmp_path / "localiser" / "localiser_best.pt")
+        res = add_model(client, loc, kind="localiser")
+        assert res.status_code == 201, res.text
+        assert res.json()["kind"] == "localiser" and res.json()["active"]
+
+        res = upload(client, files["image"])
+        client.app_state.jobs.join()
+        job = client.get(f"/api/jobs/{res.json()['job']['id']}").json()
+        assert job["status"] == "done", job
+        result = client.get(f"/api/scans/{res.json()['scan']['id']}").json()["result"]
+        assert result["site_source"] == "localiser"
+        assert result["scan"]["orientation_source"] in ("configured default",
+                                                        "localiser orientation head")
+        assert [s["tooth"] for s in result["sites"]] == [47, 46, 45, 44, 43, 42, 41,
+                                                         31, 32, 33, 34, 35, 36, 37]
+        for s in result["sites"]:
+            assert s["source"] == "localiser" and s["truth"] is None
+            assert s["verdict"]["status"]
+        assert any("localiser" in w for w in result["warnings"]),             "an image-only result must say its sites were not measured from a mask"
+
+    def test_a_site_model_is_not_accepted_as_a_localiser(self, client, files):
+        res = add_model(client, files["ckpt"], kind="localiser")
+        assert res.status_code == 400 and "localiser" in res.json()["detail"]
 
     def test_a_non_nifti_upload_is_refused(self, client, files, tmp_path):
         assert add_model(client, files["ckpt"]).status_code == 201
