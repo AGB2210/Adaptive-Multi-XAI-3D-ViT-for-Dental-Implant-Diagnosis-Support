@@ -41,7 +41,7 @@ from src.data.site_dataset import cut_patch, load_sites, patch_centre  # noqa: E
 from src.data.splits import fold_assignment, load_folds  # noqa: E402
 from src.data.taskdef import all_target_names, primary_dataset  # noqa: E402
 from src.inference.checkpoint import load_bundle  # noqa: E402
-from src.models.localiser import load_localiser, to_full_coords  # noqa: E402
+from src.models.localiser import is_located, load_localiser, to_full_coords  # noqa: E402
 from src.train.localiser import (  # noqa: E402
     localiser_datasets,
     predict_dataset,
@@ -91,6 +91,7 @@ def end_to_end(cfg, bundle, localiser, data, sites, device) -> pd.DataFrame:
         out = localiser.model(x[None].to(device))
         offset = np.array([manifest.loc[pid, f"offset_{a}"] for a in "xyz"])
         located = to_full_coords(out["coords"][0].float().cpu().numpy(), offset, localiser.cfg.factor)
+        in_view = torch.sigmoid(out["valid_logit"][0]).float().cpu().numpy()
         index = {t: k for k, t in enumerate(localiser.cfg.sites)}
 
         for r in here.itertuples():
@@ -113,9 +114,46 @@ def end_to_end(cfg, bundle, localiser, data, sites, device) -> pd.DataFrame:
                 "position_error_mm": float(np.linalg.norm(
                     (np.array([lx, ly, lz]) - np.array([r.site_x, r.site_y, r.site_z]))
                     * localiser.cfg.spacing_mm)),
+                # Whether the app would cut a patch here at all, by its own rule.
+                "in_view_prob": float(in_view[index[int(r.tooth)]]),
+                "predicted": is_located(in_view[index[int(r.tooth)]], (lx, ly, lz), volume.shape),
             })
         log.info("%d/%d patients", i + 1, len(data.patients))
     return pd.DataFrame(rows)
+
+
+def end_to_end_report(e2e: pd.DataFrame, rules: dict) -> dict:
+    """Height / width MAE and feasibility agreement, mask-placed against localiser-placed.
+
+    Reported twice. Over EVERY test site, which is the localiser's positions
+    taken at face value; and over the sites the app would actually predict --
+    in view by the localiser's own head, and inside the volume -- with the
+    mask-placed patches scored on that same subset so the two rows compare
+    like with like. `coverage` is the share of sites in the second group: the
+    rest the app shows as "no position", and an error averaged over them was
+    never going to reach a clinician.
+    """
+    names = [HEIGHT, WIDTH]
+
+    def score(frame: pd.DataFrame) -> dict:
+        truth = frame[["true_height", "true_width"]].to_numpy(dtype=float)
+        feas_true = derived_feasible(truth, names, rules)
+        out = {}
+        for tag in ("mask", "loc"):
+            pred = frame[[f"{tag}_height", f"{tag}_width"]].to_numpy(dtype=float)
+            feas = derived_feasible(pred, names, rules)
+            seen = np.isfinite(feas) & np.isfinite(feas_true)
+            out[tag] = {
+                "height_mae_mm": float(np.nanmean(np.abs(pred[:, 0] - truth[:, 0]))) if len(frame) else float("nan"),
+                "width_mae_mm": float(np.nanmean(np.abs(pred[:, 1] - truth[:, 1]))) if len(frame) else float("nan"),
+                "feasibility_agreement": float((feas[seen] == feas_true[seen]).mean()) if seen.any() else float("nan"),
+            }
+        return out
+
+    kept = e2e[e2e.predicted.astype(bool)]
+    return {"all_sites": score(e2e), "predicted_sites": score(kept),
+            "n_sites": int(len(e2e)), "n_predicted": int(len(kept)),
+            "coverage": float(len(kept) / len(e2e)) if len(e2e) else float("nan")}
 
 
 def main() -> None:
@@ -171,36 +209,33 @@ def main() -> None:
         bundle = load_bundle(args.site_checkpoint, device, fallback_config=args.config)
         e2e = end_to_end(cfg, bundle, localiser, data, sites, device)
         rules = {k: float(v) for k, v in vars(cfg.sites).items() if k.startswith("min_")}
-        names = [HEIGHT, WIDTH]
-        truth = e2e[["true_height", "true_width"]].to_numpy()
-        feas_true = derived_feasible(truth, names, rules)
-        report = {}
-        for tag in ("mask", "loc"):
-            pred = e2e[[f"{tag}_height", f"{tag}_width"]].to_numpy()
-            feas = derived_feasible(pred, names, rules)
-            seen = np.isfinite(feas) & np.isfinite(feas_true)
-            report[tag] = {
-                "height_mae_mm": float(np.nanmean(np.abs(pred[:, 0] - truth[:, 0]))),
-                "width_mae_mm": float(np.nanmean(np.abs(pred[:, 1] - truth[:, 1]))),
-                "feasibility_agreement": float((feas[seen] == feas_true[seen]).mean()),
-            }
+        report = end_to_end_report(e2e, rules)
         e2e["extra_height_err"] = (np.abs(e2e.loc_height - e2e.true_height)
                                    - np.abs(e2e.mask_height - e2e.true_height))
-        _, dlo, dhi = clustered_ci(e2e, "extra_height_err", stat=np.mean)
+        kept = e2e[e2e.predicted.astype(bool)]
         print("\n" + "=" * 78)
         print(f"END TO END -- the same site model, mask-placed vs localiser-placed patches "
               f"({len(e2e)} sites, {e2e.patient_id.nunique()} patients)")
         print("=" * 78)
-        print(f"{'':16}{'height MAE':>12}{'width MAE':>12}{'feasibility':>14}")
-        for tag, label in (("mask", "mask sites"), ("loc", "localiser sites")):
-            r = report[tag]
-            print(f"{label:16}{r['height_mae_mm']:>10.2f}mm{r['width_mae_mm']:>10.2f}mm"
-                  f"{r['feasibility_agreement']:>13.1%}")
-        print(f"\nextra height error from localising: mean {e2e.extra_height_err.mean():+.2f} mm "
-              f"[{dlo:+.2f}, {dhi:+.2f}] (patient-clustered 95% CI)")
-        result["end_to_end"] = {**report, "n_sites": int(len(e2e)),
-                                "extra_height_error_mm": float(e2e.extra_height_err.mean()),
-                                "extra_height_error_ci_mm": [dlo, dhi]}
+        print(f"the app would predict {report['n_predicted']} of {report['n_sites']} of these sites "
+              f"({report['coverage']:.1%}); the rest it shows as 'no position'")
+        print(f"\n{'':46}{'height MAE':>12}{'width MAE':>12}{'feasibility':>14}")
+        for group, title in (("predicted_sites", "the sites the app predicts"),
+                             ("all_sites", "every site, at face value")):
+            for tag, label in (("mask", "mask-placed"), ("loc", "localiser-placed")):
+                r = report[group][tag]
+                print(f"{title + ', ' + label:46}{r['height_mae_mm']:>10.2f}mm"
+                      f"{r['width_mae_mm']:>10.2f}mm{r['feasibility_agreement']:>13.1%}")
+        extra = {}
+        for name, frame in (("predicted_sites", kept), ("all_sites", e2e)):
+            if frame.empty:
+                continue
+            _, dlo, dhi = clustered_ci(frame, "extra_height_err", stat=np.mean)
+            extra[name] = {"mean_mm": float(frame.extra_height_err.mean()), "ci_mm": [dlo, dhi]}
+            print(f"extra height error from localising, {name.replace('_', ' ')}: "
+                  f"mean {extra[name]['mean_mm']:+.2f} mm [{dlo:+.2f}, {dhi:+.2f}] "
+                  f"(patient-clustered 95% CI)")
+        result["end_to_end"] = {**report, "extra_height_error": extra}
         e2e.to_csv(Path(args.checkpoint).parent / f"end_to_end_{args.split}.csv", index=False)
 
     out = Path(args.out or Path(args.checkpoint).parent / f"eval_{args.split}.json")

@@ -95,6 +95,11 @@ class LocaliserDataset(Dataset):
                     # A comparison with NaN is False, so a masked axis stays masked.
                     inside = (coords[:, a] >= 0) & (coords[:, a] <= vol.shape[a] - 1)
                     mask[:, a] &= inside
+                # A site the shift pushed off the grid is no longer in view. Its
+                # coordinates were already masked, but it went on being labelled
+                # in view -- training the in-view head to say "present" for a
+                # site that is not in the input, and its spread toward zero.
+                valid = valid * (mask[:, 0] & mask[:, 1])
             vol = vol * (1.0 + rng.uniform(-0.1, 0.1)) + rng.uniform(-0.1, 0.1)
         x = torch.from_numpy(np.ascontiguousarray(vol, dtype=np.float32))[None]
         return (x, torch.from_numpy(np.nan_to_num(coords).astype(np.float32)),

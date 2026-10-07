@@ -117,6 +117,25 @@ class TestTargets:
         _, mask, valid = site_targets(self.sites(), "P", LOWER_ARCH, [0, 0, 0], 4, methods=("teeth",))
         assert valid[2] == 0 and not mask[2].any()
 
+    def test_a_site_shifted_off_the_grid_is_no_longer_in_view(self, tmp_path):
+        """One grid voxel from the edge, shifted by up to six: whenever the
+        coordinates are masked, the in-view label has to go with them."""
+        man = pd.DataFrame([{"patient_id": "p", "status": "ok",
+                             "offset_x": 0, "offset_y": 0, "offset_z": 0}])
+        sites = pd.DataFrame([{"patient_id": "p", "jaw": "lower", "tooth": 36,
+                               "site_method": "teeth", "site_x": 5.5, "site_y": 40.0,
+                               "site_z": 40.0, "reason": ""}])
+        np.save(tmp_path / "p.npy", np.zeros((16, 16, 16), dtype=np.float16))
+        data = LocaliserDataset(tmp_path, man, sites, ["p"], (36,), factor=4, augment=True,
+                                flip_prob=0.0, translate=6, seed=0)
+        seen = {"in": 0, "out": 0}
+        for _ in range(200):
+            _, _, mask, valid, _ = data[0]
+            on_grid = bool(mask[0, 0] and mask[0, 1])
+            assert float(valid[0]) == float(on_grid)
+            seen["in" if on_grid else "out"] += 1
+        assert seen["in"] and seen["out"], seen
+
     def test_a_flipped_sample_still_points_at_its_site(self, tmp_path):
         """The orientation augmentation must move the target with the image."""
         sites = self.sites()
@@ -164,6 +183,39 @@ class TestItLearns:
             opt.step()
             first = first if first is not None else loss["coord_mm"].item()
         assert loss["coord_mm"].item() < first / 3, (first, loss["coord_mm"].item())
+
+
+class TestWhatTheEvaluationCounts:
+    """The end-to-end table has to describe the app, which declines to predict
+    a site its localiser places out of view."""
+
+    RULES = {"min_height_mandible_mm": 12.0, "min_height_maxilla_mm": 10.0, "min_width_mm": 6.0}
+
+    def test_one_rule_decides_whether_a_site_is_predicted(self):
+        from src.models.localiser import is_located
+        shape = (100, 100, 70)
+        assert is_located(0.9, (50, 50, 30), shape)
+        assert not is_located(0.49, (50, 50, 30), shape), "the in-view head says it is not there"
+        assert not is_located(0.9, (50, 50, 70), shape), "outside the volume"
+        assert not is_located(0.9, (-1, 50, 30), shape)
+
+    def test_a_declined_site_does_not_count_against_the_sites_that_are_predicted(self):
+        from scripts.eval_localiser import end_to_end_report
+        rows = [{"patient_id": "a", "tooth": t, "true_height": 15.0, "true_width": 8.0,
+                 "mask_height": 15.0, "mask_width": 8.0, "loc_height": 16.0, "loc_width": 8.0,
+                 "predicted": True} for t in (35, 36, 37)]
+        # Placed far away, and the localiser's own head says it is out of view.
+        rows.append({"patient_id": "a", "tooth": 47, "true_height": 15.0, "true_width": 8.0,
+                     "mask_height": 15.0, "mask_width": 8.0, "loc_height": 3.0, "loc_width": 8.0,
+                     "predicted": False})
+        report = end_to_end_report(pd.DataFrame(rows), self.RULES)
+        assert report["n_sites"] == 4 and report["n_predicted"] == 3 and report["coverage"] == 0.75
+        assert report["predicted_sites"]["loc"]["height_mae_mm"] == pytest.approx(1.0)
+        assert report["all_sites"]["loc"]["height_mae_mm"] == pytest.approx((1 + 1 + 1 + 12) / 4)
+        assert report["predicted_sites"]["mask"]["height_mae_mm"] == 0.0, \
+            "mask-placed patches are scored on the same subset"
+        assert report["all_sites"]["loc"]["feasibility_agreement"] == 0.75
+        assert report["predicted_sites"]["loc"]["feasibility_agreement"] == 1.0
 
 
 class TestLoading:

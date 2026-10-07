@@ -457,11 +457,21 @@ for k in 0 1 2 3 4; do python scripts/eval_localiser.py --config configs/localis
 ```
 
 The evaluation pairs each localiser with the site model **of the same fold**, so
-both have never seen the test patients. Read two lines: the median 3D position
-error with its patient-clustered interval, and the end-to-end table -- the site
-model's height and width MAE from mask-placed patches against localiser-placed
-ones. The second is the cost of running without a segmentation, and it is the
-number to quote beside any image-only result.
+both have never seen the test patients. Read three things: the median 3D
+position error with its patient-clustered interval; the **coverage** line -- how
+many test sites the app would predict at all, the rest being ones the localiser
+itself places out of view and the app shows as "no position"; and the end-to-end
+table -- the site model's height and width MAE from mask-placed patches against
+localiser-placed ones, on the sites the app predicts. That last row is the cost
+of running without a segmentation, and it is the number to quote beside any
+image-only result, **together with the coverage it was measured at**. The
+"every site, at face value" rows include sites the app would decline, and
+describe the localiser rather than the app.
+
+Check the orientation line too. The app turns a scan over on the localiser's
+word only if this checkpoint was at least 95% correct on orientation on its
+validation patients (`app.min_orientation_accuracy`); below that it keeps the
+default and says so on every result.
 
 ### Anything produced before v3.1.0 has to be re-run
 

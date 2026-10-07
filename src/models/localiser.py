@@ -197,6 +197,21 @@ def localiser_loss(out: dict, target: torch.Tensor, coord_mask: torch.Tensor,
 
 
 # ---------------------------------------------------------------- loading
+IN_VIEW_THRESHOLD = 0.5
+
+
+def is_located(in_view_prob: float, xyz, shape) -> bool:
+    """Whether a predicted site is one a patch will be cut at.
+
+    ONE RULE, TWO CALLERS: `Localiser.locate`, which is what the app runs, and
+    `scripts/eval_localiser.py`, which measures it. Scored over sites the app
+    would have declined to predict, the evaluation describes a pipeline that
+    does not exist.
+    """
+    return (float(in_view_prob) >= IN_VIEW_THRESHOLD
+            and all(0 <= float(v) < n for v, n in zip(xyz, shape)))
+
+
 @dataclass
 class Localiser:
     """A loaded localiser, ready to `locate` sites on a prepared volume."""
@@ -256,11 +271,10 @@ class Localiser:
             x, y, z = (float(v) for v in p["full"][i])
             in_view = float(p["valid_prob"][i])
             spread = float(p["spread_mm"][i])
-            inside = all(0 <= v < n for v, n in zip((x, y, z), volume.shape))
             site = {"tooth": int(tooth), "jaw": "lower", "site_x": x, "site_y": y, "site_z": z,
                     "source": "localiser", "method": "localiser", "anchors": None, "truth": None,
                     "position_sd_mm": spread, "in_view_prob": in_view}
-            if in_view < 0.5 or not inside:
+            if not is_located(in_view, (x, y, z), volume.shape):
                 site.update({"site_x": None, "site_y": None, "site_z": None,
                              "note": f"the localiser places this site outside the field of view "
                                      f"(P(in view) {in_view:.2f})"})
