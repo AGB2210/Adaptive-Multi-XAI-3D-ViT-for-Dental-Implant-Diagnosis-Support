@@ -93,3 +93,34 @@ class TestTheCrashItself:
         before = source.index("header_target = explanation_target")
         loop = source.index("for case_index, pid in enumerate(todo):")
         assert before < loop, "the header's target must be bound before the loop"
+
+
+class TestTheAdaptiveSummaryReadsItsRows:
+    """`run_adaptive.py` had the same fault one script over: its summary read
+    the per-case loop's `target`, and `--from-csv` -- the flag that exists so
+    an hour of compute is not lost to a reporting bug -- skips that loop."""
+
+    @staticmethod
+    def note():
+        path = ROOT / "scripts" / "run_adaptive.py"
+        spec = importlib.util.spec_from_file_location("run_adaptive_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.direction_note
+
+    def test_a_probability_target_reads_the_usual_way(self):
+        assert self.note()(["probability"] * 3, ["response"] * 3) == "lower is better"
+
+    def test_a_millimetre_head_has_no_founded_direction_at_the_default_score(self):
+        assert "not founded" in self.note()(["mm", "mm"], ["response", "response"])
+
+    def test_deviation_restores_the_direction_for_a_millimetre_head(self):
+        note = self.note()(["mm"], ["deviation"])
+        assert note.startswith("lower is better") and "deviation" in note
+
+    def test_the_summary_no_longer_reads_the_loop_variable(self):
+        source = (ROOT / "scripts" / "run_adaptive.py").read_text(encoding="utf-8")
+        summary = source[source.index("# ---- report the three claims"):]
+        assert "direction_note(" in summary
+        assert "target <" not in summary, "the per-case `target` is unbound under --from-csv"

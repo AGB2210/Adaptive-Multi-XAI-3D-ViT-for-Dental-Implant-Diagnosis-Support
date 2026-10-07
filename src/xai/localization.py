@@ -42,9 +42,9 @@ other, and to the per-voxel methods only with that stated.
 An achievable-ceiling control is what would put a scale under these numbers: run
 the same methods on the synthetic planted-signal task, where the correct answer
 is known exactly, and report enrichment relative to what each method can reach
-at its own resolution. Without it, "3.2x enrichment" has no denominator. Not
-implemented yet; it is CPU-only and cheap, and it would strengthen every
-localisation result in the paper.
+at its own resolution. Without it, "3.2x enrichment" has no denominator. It was
+run on 30-31 August from a script that is not in this repository
+(`REPORT.md` C8m), so there is still no implementation here to re-run it with.
 
 BUT IT CANNOT BE BUILT ON THE EXISTING PLANTED SIGNAL UNCHANGED. Enrichment is
 bounded by resolution, so a ceiling transfers between two targets only if they

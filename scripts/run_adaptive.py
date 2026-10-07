@@ -65,6 +65,26 @@ from src.xai.visualize import pareto_curve  # noqa: E402
 log = get_logger("adaptive")
 
 
+def direction_note(units, scores) -> str:
+    """How to read the held-out score, from the rows being summarised.
+
+    `units` and `scores` are the `target_unit` and `score` values those rows
+    carry. This used to read `target`, the per-case loop's variable, after the
+    loop -- and `--from-csv` skips that loop, so the flag that exists to save
+    an hour of compute from a reporting bug ended in a NameError before it
+    printed anything. `run_faithfulness.direction_note` records the same fault
+    under `--only-randomization`. Read from the rows, the line also describes
+    the file being reused and not the flags of the run reusing it.
+    """
+    units, scores = set(units), set(scores)
+    if units <= {"probability"}:
+        return "lower is better"
+    if scores == {"deviation"}:
+        return "lower is better: millimetre head, restored by score=deviation"
+    return ("direction not founded for a millimetre head at score='response' -- "
+            "compare methods, do not rank them against an absolute")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -299,8 +319,12 @@ def main() -> None:
     print("ADAPTIVE LAYER — the three claims")
     # The direction depends on the target and the scoring mode, so it is
     # stated conditionally rather than asserted. See run_faithfulness.
-    direction = ("lower is better" if target < len(bin_names)
-                 else f"direction not founded for a millimetre head at score={args.score!r}")
+    # A file written before these columns existed carries neither: it explained
+    # the millimetre head if the checkpoint has one, at the score it was run at.
+    direction = direction_note(
+        ablations["target_unit"] if "target_unit" in ablations
+        else ["mm" if spec.is_hybrid else "probability"],
+        ablations["score"] if "score" in ablations else [args.score])
     print(f"weighted BY: {WEIGHT_METRIC}   evaluated ON: {EVAL_METRIC} ({direction})")
     print("=" * 74)
 
@@ -314,10 +338,10 @@ def main() -> None:
     # on different subsets of cases. Print the count alongside: equal counts mean
     # the ordering is like for like, unequal ones mean it is not.
     for col in sorted(eval_cols, key=lambda c: ablations[c].mean()):
-        print(f"   {col.replace('eval_', ''):<24}{ablations[col].mean():.4f}"
+        print(f"   {col.replace('eval_', ''):<30}{ablations[col].mean():.4f}"
               f"   n={int(ablations[col].notna().sum())}")
-    print(f"   {'FUSED (agreement-weighted)':<24}{ablations['fused_eval'].mean():.4f}")
-    print(f"   {'UNIFORM ensemble':<24}{ablations['uniform_eval'].mean():.4f}")
+    print(f"   {'FUSED (agreement-weighted)':<30}{ablations['fused_eval'].mean():.4f}")
+    print(f"   {'UNIFORM ensemble':<30}{ablations['uniform_eval'].mean():.4f}")
 
     win1 = float(ablations["beats_best_individual"].mean())
     win2 = float(ablations["beats_uniform"].mean())
