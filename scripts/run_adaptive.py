@@ -96,6 +96,11 @@ def main() -> None:
                     help="cross-validation round; inferred from a cv_foldK checkpoint path")
     ap.add_argument("--n-cases", dest="n_cases", type=int, default=None,
                     help="default comes from xai.adaptive_cases in the config")
+    ap.add_argument("--calibration-only", dest="calibration_only", action="store_true",
+                    help="fit the temperature and the gate on validation, write "
+                         "calibration.json beside the checkpoint, and stop. Minutes, not "
+                         "the hour the per-case sweep takes: it is how folds 1-4 get the "
+                         "calibration the app reads, when the sweep is only wanted on fold 0")
     ap.add_argument("--from-csv", dest="from_csv", action="store_true",
                     help="reuse artifacts/results_ablations.csv and only redo the summary; "
                          "the per-case sweep costs over an hour and must not be lost to a "
@@ -177,9 +182,14 @@ def main() -> None:
     val_uncertainty = uncertainty(probs_after, args.uncertainty)
     gate = ConfidenceGate.fit(val_uncertainty, args.ensemble_fraction)
 
-    (art / "calibration").mkdir(parents=True, exist_ok=True)
+    # `--calibration-only` writes beside the checkpoint and nowhere else. The
+    # copy under artifacts/ is the one the fold-0 analysis was run with, and a
+    # later fold's calibration must not replace it underneath those results.
+    shared = None if args.calibration_only else art / "calibration"
+    if shared is not None:
+        shared.mkdir(parents=True, exist_ok=True)
     reliability_diagram(bins_before, bins_after, ece_before, ece_after,
-                        art / "calibration" / "reliability.png",
+                        (shared or Path(args.checkpoint).parent) / "reliability.png",
                         title=f"Validation calibration (n={n_cases} cases from "
                               f"{n_patients} patients x {len(bin_names)} binary labels)")
     calibration = {
@@ -193,8 +203,8 @@ def main() -> None:
         "gate_cheap_method": gate.cheap_method,
         "checkpoint": str(args.checkpoint),
     }
-    (art / "calibration" / "calibration.json").write_text(
-        json.dumps(calibration, indent=2), encoding="utf-8")
+    if shared is not None:
+        (shared / "calibration.json").write_text(json.dumps(calibration, indent=2), encoding="utf-8")
     # A second copy BESIDE the checkpoint it was fitted for. A temperature and a
     # gate belong to one set of weights; the copy under artifacts/ is overwritten
     # by the next fold's run, and the app reads this one when the .pt is added.
@@ -209,6 +219,13 @@ def main() -> None:
     print(f"ECE after     = {ece_after:.4f}   ({'improved' if ece_after < ece_before else 'NO improvement'})")
     if ece_after >= ece_before:
         print("Temperature scaling did not help -- report this; the gate rests on calibrated scores.")
+
+    if args.calibration_only:
+        print(f"gate threshold {gate.threshold:.4f} on {args.uncertainty} uncertainty "
+              f"(escalates ~{100 * args.ensemble_fraction:.0f}% of validation cases)")
+        print()
+        print(f"wrote {Path(args.checkpoint).parent / 'calibration.json'}")
+        return
 
     # ---- 2. confidence gate fitted on validation ------------------------
     # Fitted above, so the threshold could be written into calibration.json.

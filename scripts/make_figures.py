@@ -140,7 +140,12 @@ def main() -> None:
     ids, y, label_names = cases.ids, cases.y, cases.labels
     logits = predict_case_logits(model, cases, device)
 
-    calib_path = art / "calibration" / "calibration.json"
+    # Beside the checkpoint first: that copy was fitted for these weights. The
+    # one under artifacts/ belongs to whichever fold `run_adaptive.py` saw last,
+    # and once more than one fold is calibrated that is no longer this one.
+    calib_path = Path(args.checkpoint).parent / "calibration.json"
+    if not calib_path.exists():
+        calib_path = art / "calibration" / "calibration.json"
     temperature = 1.0
     if calib_path.exists():
         temperature = json.loads(calib_path.read_text(encoding="utf-8"))["temperature"]
