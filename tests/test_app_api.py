@@ -38,7 +38,8 @@ def client(tmp_path):
     settings = load_settings("configs/app.yaml", data_dir=str(tmp_path / "data"), device="cpu")
     settings.xai = dict(TINY_XAI)
     app = create_app(settings)
-    with TestClient(app) as c:
+    # Addressed as the app is in a browser: it refuses names it does not have.
+    with TestClient(app, base_url=f"http://{settings.host}:{settings.port}") as c:
         c.app_state = app.state
         yield c
 
@@ -107,12 +108,33 @@ class TestModels:
         assert foreign.status_code == 403
         assert client.get("/api/models").json() == []
         own = client.post("/api/models", files=handles, data={"kind": "site"},
-                          headers={"Origin": "http://testserver"})
+                          headers={"Origin": str(client.base_url).rstrip("/")})
         assert own.status_code == 201, own.text
         model_id = own.json()["id"]
         assert client.delete(f"/api/models/{model_id}",
                              headers={"Origin": "http://elsewhere.example"}).status_code == 403
         assert client.get("/api/status", headers={"Origin": "http://elsewhere.example"}).status_code == 200
+
+    def test_the_app_does_not_answer_to_a_name_it_does_not_have(self, client, files):
+        """A site that points its own name at 127.0.0.1 shares an origin with the
+        app, so the Origin check passes and it could read scans too."""
+        as_other = {"Host": "elsewhere.example:8000"}
+        assert client.get("/api/scans", headers=as_other).status_code == 403
+        assert client.get("/", headers=as_other).status_code == 403
+        handles = [("files", (files["ckpt"].name, files["ckpt"].read_bytes()))]
+        res = client.post("/api/models", files=handles, data={"kind": "site"},
+                          headers={**as_other, "Origin": "http://elsewhere.example:8000"})
+        assert res.status_code == 403 and client.get("/api/models").json() == []
+        for name in ("localhost:8000", "127.0.0.1:8000", "[::1]:8000", "LOCALHOST"):
+            assert client.get("/api/status", headers={"Host": name}).status_code == 200, name
+
+    def test_an_app_put_on_a_network_answers_to_any_name(self, tmp_path):
+        """Bound beyond this machine it was exposed on purpose, and its names
+        there cannot be known from here."""
+        settings = load_settings("configs/app.yaml", data_dir=str(tmp_path / "lan"),
+                                 device="cpu", host="0.0.0.0")
+        with TestClient(create_app(settings), base_url="http://scanner.lan:8000") as c:
+            assert c.get("/api/status").status_code == 200
 
     def test_a_model_and_its_companions_are_kept_and_activated(self, client, files):
         res = add_model(client, files["ckpt"], files["cal"], files["metrics"])

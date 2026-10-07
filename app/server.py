@@ -119,21 +119,39 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.settings, app.state.registry = settings, registry
     app.state.store, app.state.jobs = store, jobs
 
+    # Bound to this machine only, the app has exactly these names. Bound to
+    # anything else it was put on a network on purpose, and its names there
+    # are not knowable from here.
+    local_names = ({"127.0.0.1", "localhost", "::1"}
+                   if settings.host in ("127.0.0.1", "localhost", "::1") else None)
+
     @app.middleware("http")
-    async def same_origin_only(request: Request, call_next):
-        """Refuse a change that another site's page asked this browser to make.
+    async def this_machine_only(request: Request, call_next):
+        """Refuse what another site's page gets this browser to send.
+
+        Two ways in, and each check alone leaves the other open.
 
         A page on any site can make the browser POST a form to 127.0.0.1 -- a
         file upload needs no permission from the server, only the response is
-        withheld -- so without this any open tab could add a scan or a model
-        to the app. The browser names the page it is acting for in `Origin`;
-        the app's own page always matches the address it was reached at.
+        withheld -- so any open tab could add a scan or a model. The browser
+        names the page it is acting for in `Origin`, and the app's own page
+        always matches the address it was reached at.
+
+        A site can also point its OWN name at 127.0.0.1 after the page has
+        loaded. Then the page and the app share an origin, the check above
+        passes, and the page can read every scan as well as change them. The
+        browser still sends that site's name in `Host`, so a name the app does
+        not have is refused, reads included.
+
         Requests with no `Origin` (curl, scripts, tests) are not a browser
-        acting for someone else and pass.
+        acting for someone else, and pass the first check.
         """
+        host = request.headers.get("host", "")
+        if local_names is not None and urlsplit(f"//{host}").hostname not in local_names:
+            return JSONResponse({"detail": "this app answers only as localhost or 127.0.0.1"}, 403)
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
-            if urlsplit(origin).netloc != request.headers.get("host"):
+            if urlsplit(origin).netloc != host:
                 return JSONResponse({"detail": "request from another site refused"}, 403)
         return await call_next(request)
 
