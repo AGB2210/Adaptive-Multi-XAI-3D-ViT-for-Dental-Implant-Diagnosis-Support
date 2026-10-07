@@ -120,7 +120,10 @@ than quietly changed. Arguments after `start.bat` are passed through:
 2. **Scan** — a ToothFairy3-format CBCT (`.nii` / `.nii.gz`), with its mask if
    there is one. With a mask, sites are located and measured by the label
    builder's own `score_one`, and the measured values appear beside each
-   prediction. Without one, a trained site localiser finds them (below).
+   prediction. Without one, a trained site localiser finds them (below). It
+   also says whether the scan is stored upside down; the app turns a scan over
+   only if that head was at least 95% accurate on the localiser's own
+   validation patients (`app.min_orientation_accuracy`), and says so either way.
 3. **Result** — the fourteen lower sites on an axial projection and a tooth
    chart, each judged *no implant needed / feasible / not feasible / borderline*.
    Borderline means the prediction is within the model's own validation error of

@@ -118,8 +118,12 @@ def write_tiny_checkpoint(path: Path, embed_config: bool = True, seed: int = 0,
 SMALL_LOCALISER = dict(factor=4, input_shape=(32, 32, 24), channels=(4, 8, 8, 8))
 
 
-def write_tiny_localiser(path, seed: int = 0, **cfg) -> Path:
-    """An untrained localiser small enough for the toy scan's 25 x 25 x 17 grid."""
+def write_tiny_localiser(path, seed: int = 0, val: dict | None = None, **cfg) -> Path:
+    """An untrained localiser small enough for the toy scan's 25 x 25 x 17 grid.
+
+    `val` is what the checkpoint claims about itself; by default it records no
+    orientation accuracy, as a checkpoint from before that was measured would.
+    """
     torch.manual_seed(seed)
     config = LocaliserConfig(**{**SMALL_LOCALISER, **cfg})
     path = Path(path)
@@ -127,5 +131,5 @@ def write_tiny_localiser(path, seed: int = 0, **cfg) -> Path:
     torch.save({"kind": "localiser", "epoch": 1, "fold": 0,
                 "model": SiteLocaliser(config).state_dict(),
                 "localiser_config": config.to_dict(),
-                "val": {"median_error_mm": 2.5}}, path)
+                "val": {"median_error_mm": 2.5, **(val or {})}}, path)
     return path

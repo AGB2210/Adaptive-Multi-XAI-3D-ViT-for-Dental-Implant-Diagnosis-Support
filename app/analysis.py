@@ -54,6 +54,32 @@ def overview(volume: np.ndarray, sites: list[dict], spacing_mm: float, window) -
     return to_uint8(mip, *window), info
 
 
+def trusted(located: dict, minimum: float) -> bool:
+    """Whether this localiser's orientation head has earned being acted on."""
+    accuracy = located.get("orientation_accuracy")
+    return accuracy is not None and float(accuracy) >= float(minimum)
+
+
+def orientation_note(located: dict, minimum: float) -> str | None:
+    """What the result says when the orientation head wanted the scan turned over.
+
+    Turning a scan over changes every patch the site model is shown, and an
+    upside-down jaw still produces confident millimetres. So the head is only
+    obeyed when its measured accuracy clears `minimum`, and either way the
+    result states what it said and how good it has been.
+    """
+    if not located.get("flip"):
+        return None
+    accuracy = located.get("orientation_accuracy")
+    measured = ("has no measured accuracy" if accuracy is None
+                else f"was {float(accuracy):.0%} correct on its validation patients")
+    said = f"The localiser's orientation head says this scan is stored upside down (P = {located['flip_prob']:.2f})"
+    if trusted(located, minimum):
+        return f"{said}, and it {measured}: the scan was turned over."
+    return (f"{said}, but it {measured}, below the {float(minimum):.0%} required to act on it: "
+            f"the configured default orientation was kept.")
+
+
 def analyse(settings: Settings, registry: ModelRegistry, store: ScanStore,
             scan_id: str, progress) -> dict:
     meta = store.meta(scan_id)
@@ -88,7 +114,8 @@ def analyse(settings: Settings, registry: ModelRegistry, store: ScanStore,
         progress("Locating tooth sites (localiser)", 0.45)
         located = localiser.locate(prepared.volume, settings.spacing_mm,
                                    jaws=settings.site_jaws)
-        if located.get("flip"):
+        note = orientation_note(located, settings.min_orientation_accuracy)
+        if located.get("flip") and trusted(located, settings.min_orientation_accuracy):
             # The localiser's orientation head disagrees with the default: the
             # scan is the other way up. Re-prepare rather than flip a z-scored
             # array, so the volume is produced by the one shared transform.
@@ -101,6 +128,8 @@ def analyse(settings: Settings, registry: ModelRegistry, store: ScanStore,
                                        jaws=settings.site_jaws)
         sites = located["sites"]
         warnings += located.get("warnings", [])
+        if note:
+            warnings.append(note)
     else:
         progress("Locating and measuring tooth sites (mask)", 0.45)
         sites = sites_from_mask(prepared.mask, prepared.spacing, settings.rules,

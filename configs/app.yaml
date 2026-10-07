@@ -34,6 +34,17 @@ app:
   # came out at -1 (sites_toothfairy3.csv, orientation_sign).
   default_orientation_sign: -1
 
+  # A localiser also says whether a scan is upside down, and the app turns the
+  # scan over on its word -- but only if that head was at least this accurate
+  # on the checkpoint's own validation patients, each shown both ways up.
+  # Below it, or with no accuracy recorded, the default above stands and the
+  # result says the head was overruled. The bar is high on purpose: the default
+  # was right on 522 of 522 scans, so a head has to be nearly perfect before
+  # following it beats ignoring it, and an upside-down patch still looks like a
+  # jaw. A three-epoch smoke localiser sat at 0.50 and turned a correctly
+  # stored scan over.
+  min_orientation_accuracy: 0.95
+
   # A browser-picked file is not trusted to run code: checkpoints must load
   # under torch.load(weights_only=True). Turn on only for your own files.
   allow_unsafe_checkpoints: false

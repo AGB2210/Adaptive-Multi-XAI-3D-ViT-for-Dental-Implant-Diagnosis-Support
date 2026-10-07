@@ -269,7 +269,10 @@ class Localiser:
                                 f"this localiser's typical {float(typical):.1f} mm")
             sites.append(site)
         return {"sites": sites, "flip": p["flip_prob"] > 0.5,
-                "flip_prob": p["flip_prob"], "warnings": warnings}
+                "flip_prob": p["flip_prob"], "warnings": warnings,
+                # Measured on this checkpoint's validation patients, each shown
+                # both ways up. None for a checkpoint that never recorded it.
+                "orientation_accuracy": (self.meta.get("val") or {}).get("orientation_accuracy")}
 
 
 def load_localiser(path, device: torch.device, allow_unsafe: bool = False) -> Localiser:

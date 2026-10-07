@@ -27,6 +27,7 @@ class Settings:
     spacing_mm: float
     spacing_tolerance: float
     default_orientation_sign: int
+    min_orientation_accuracy: float
     allow_unsafe_checkpoints: bool
     window: tuple[float, float]
     clip_window: tuple[float, float]
@@ -79,6 +80,7 @@ def load_settings(config_path: str | Path | None = None, **overrides) -> Setting
         spacing_mm=float(app.spacing_mm),
         spacing_tolerance=float(app.spacing_tolerance),
         default_orientation_sign=int(app.default_orientation_sign),
+        min_orientation_accuracy=float(app.min_orientation_accuracy),
         allow_unsafe_checkpoints=bool(getattr(app, "allow_unsafe_checkpoints", False)),
         window=tuple(float(v) for v in getattr(app, "window", (-2.0, 4.0))),
         clip_window=tuple(float(v) for v in cfg.preprocess.clip_window),
