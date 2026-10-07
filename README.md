@@ -35,10 +35,11 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Native-resolution cache builder, patch dataset, training wiring | **Done** — the full cache is built: 522 volumes, 26.4 GB, ~19 min on the rented box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
 | Test suite | **Green** on Python 3.12, ruff clean — the one version CI gates. Older is refused; newer is not tested |
-| XAI stack on the site task | **Done.** Randomisation and faithfulness stand; **localisation is withdrawn pending a re-run** — its anatomy masks were cut 7.2 mm from the box the model was shown |
+| XAI stack on the site task | **Done.** Randomisation and faithfulness stand. **Localisation was re-run after the mask fix** (v3.4.0; the earlier figures, scored on masks cut 7.2 mm from the box the model was shown, stay withdrawn): enrichment against the canal is Grad-CAM 1.92, attention rollout 1.60, Integrated Gradients 1.45 and GradientSHAP 0.69, where 1.0 is chance. The pointing rate is 0.000 for every method and Grad-CAM's interval overlaps rollout's, so no best localiser is named |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
 | Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation") |
-| Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator is written and never run on real scans |
+| Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator was run on fold 0's test sites: height MAE 6.60 mm against its own floor of 7.05, width 6.68 mm against a floor of 3.63 — worse than predicting the median — and it declines to answer on 81.4% of sites |
+| Result files | The five-fold and v3.4.0 figures in this table are quoted from the report of the 30–31 August run (`REPORT.md` §C8i, §C8m). That run's result files were never transferred off the rented machine; only fold 0's rows are held, on the `fold0-results` branch |
 | Guide sign-off on clinical thresholds | **Pending** |
 
 **The headline result is a negative one, and it is stated here rather than
@@ -58,8 +59,8 @@ point at the implant?"* — which metal passes trivially, and is how Integrated
 Gradients scored 86x chance while failing the randomisation check. It now asks
 *"the model says NOT feasible; does the explanation point at the inferior
 alveolar canal?"* The canal is a dark tube inside bone, and it is **small**:
-measured over the 485 scored patches its median share is **0.48%**, with the
-middle 90% running 0.014% to 0.92% and a full spread of 0.0002% to 1.40%. An
+over the 189 patches scored in the corrected run its median share of the patch
+is **0.469%**. An
 edge detector cannot find it by accident — but a token spans 2.4 mm and the
 canal is under 3 mm across, which is the resolution caveat §C8i.5 of `REPORT.md`
 attaches to every enrichment figure.
@@ -191,17 +192,17 @@ from the checkpoint.
 Measured over all 522 usable scans, of the sites that need an implant:
 
 ```
-mandible    884 needed,  826 measurable   93.4%
-maxilla    2682 needed,   36 measurable    1.3%
+mandible    884 needed,  819 measurable   92.6%
+maxilla    2682 needed,   35 measurable    1.3%
 ```
 
-98% of the unmeasurable maxillary sites have no bone voxels at all — after an
+99% of the unmeasurable maxillary sites have no bone voxels at all — after an
 upper tooth is lost the ridge resorbs, the sinus pneumatises, and ToothFairy3's
 `UpperJaw` mask does not cover the remnant. Training on them would reproduce an
 annotation gap as a clinical verdict.
 
 Nothing important is lost: the inferior alveolar canal is annotated in **every**
-scan, and nerve clearance limits 376 of the 413 infeasible sites — which is both
+scan, and nerve clearance limits 372 of the 409 infeasible sites — which is both
 the real clinical danger and a target an edge detector cannot fake, because the
 canal is a dark tube inside bone rather than a bright edge.
 
@@ -244,6 +245,13 @@ because that rule moves a third of the answers. Results are again incomparable
 with what came before, and the config schema, `predict`, and `Trainer` all
 changed signature.
 
+**v3.4.0 moved the labels once more, by ten rows.** A height that came out
+negative used to be written as 0.0 mm; it is now NaN and the site is dropped as
+unmeasurable. That takes 6 rows out of the trainable set (6,787 → 6,781) and 4
+of its positives (709 → 705), and nothing else in the table changes. Every
+count and floor below is for that table, and was recomputed at v3.7.3 by
+rebuilding it from the masks.
+
 Three majors in a day is not inflation. Each marks a point where a number
 produced before it stops meaning the same thing as one produced after -- v2.0.0
 changed the labels, v3.0.0 changed what the model predicts -- and the floors move
@@ -266,12 +274,13 @@ feasible = available_height_mm >= 12.0 and ridge_width_mm >= 6.0
 ```
 
 That matters because the threshold is the largest single lever in the project.
-Over the 709 mandibular sites that need an implant:
+Over the 705 mandibular sites that need an implant, with the width rule held at
+6 mm:
 
 ```
-height rule 10 mm -> 266 infeasible (37.5%)
-height rule 12 mm -> 390 infeasible (55.0%)
-height rule 14 mm -> 503 infeasible (70.9%)
+height rule 10 mm -> 287 infeasible (40.7%)
+height rule 12 mm -> 409 infeasible (58.0%)
+height rule 14 mm -> 516 infeasible (73.2%)
 ```
 
 A 2 mm revision moves a third of the answers. As a classifier that revision costs
@@ -290,8 +299,8 @@ visual task -- so a high AUROC there is a sanity check, not a finding.
 ## The three numbers to quote a result against
 
 ```
-needs_implant     BCE floor 0.3348   AUROC floor 0.500   AP floor 0.1045
-available_height  MAE floor 6.91 mm  RMSE floor 7.97 mm
+needs_implant     BCE floor 0.3337   AUROC floor 0.500   AP floor 0.1040
+available_height  MAE floor 6.90 mm  RMSE floor 7.95 mm
 ridge_width       MAE floor 3.58 mm  RMSE floor 4.40 mm
 ```
 

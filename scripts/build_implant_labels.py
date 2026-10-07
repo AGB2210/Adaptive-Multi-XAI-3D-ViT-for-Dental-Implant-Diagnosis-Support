@@ -58,9 +58,9 @@ log = get_logger("implant_labels")
 # A build that skips most of the cohort still exits 0 with a plausible CSV, so
 # the skip rate is a hard gate rather than a warning.
 #
-# THE MARGIN IS ZERO ON THE CURRENT COHORT. Ten of ToothFairy3's 532 scans carry
-# only LowerJaw, both canals and the pharynx, so no upper/lower structure pair
-# resolves and `superior_sign` raises rather than guessing. That is 1.88%
+# THE MARGIN IS ZERO ON THE CURRENT COHORT. `superior_sign` raises on ten of
+# ToothFairy3's 532 scans rather than guessing: six carry no upper/lower
+# structure pair at all, and on four the pairs disagree. That is 1.88%
 # against this 2% ceiling: one more such scan in a future cohort and the build
 # refuses to certify. That is the guard behaving correctly, but it is worth
 # knowing before it happens, because the failure will look sudden.

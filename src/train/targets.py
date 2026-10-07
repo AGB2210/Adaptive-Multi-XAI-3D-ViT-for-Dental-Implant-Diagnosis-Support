@@ -9,11 +9,12 @@ to two measurements:
 
 Training on it compiles 12.0 into the weights. That matters more than it sounds,
 because the threshold is the single largest lever in the project. Measured on the
-mandibular teeth-tier cohort, over the 709 sites that need an implant:
+mandibular teeth-tier cohort, over the 705 sites that need an implant, with the
+width rule held at 6 mm:
 
-    height rule 10 mm -> 266 infeasible (37.5%)
-    height rule 12 mm -> 390 infeasible (55.0%)
-    height rule 14 mm -> 503 infeasible (70.9%)
+    height rule 10 mm -> 287 infeasible (40.7%)
+    height rule 12 mm -> 409 infeasible (58.0%)
+    height rule 14 mm -> 516 infeasible (73.2%)
 
 A 2 mm revision moves a third of the answers. As a classifier that revision costs
 five folds of retraining; predicting millimetres, it costs a re-score. This is the
@@ -257,7 +258,7 @@ def regression_metrics(y_true_mm: np.ndarray, y_pred_mm: np.ndarray,
 
     The floor is the same discipline the BCE floor enforces: a model that has
     learned nothing still scores something, and on these targets that something
-    is MAE 6.91 mm for height and 3.58 mm for width. A result quoted without it
+    is MAE 6.90 mm for height and 3.58 mm for width. A result quoted without it
     is unreadable.
     """
     out = {}

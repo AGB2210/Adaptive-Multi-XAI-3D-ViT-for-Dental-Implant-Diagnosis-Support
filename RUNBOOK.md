@@ -29,8 +29,8 @@ methods also written from scratch. Explanations are scored against the inferior
 alveolar canal: if the model says *"not feasible, nerve too close"*, we check
 whether the explanation actually points at the nerve.
 
-**Scope is the lower jaw only.** Of the sites that need an implant, 93.4% are
-measurable in the mandible (826 of 884) and 1.3% in the maxilla (36 of 2,682) --
+**Scope is the lower jaw only.** Of the sites that need an implant, 92.6% are
+measurable in the mandible (819 of 884) and 1.3% in the maxilla (35 of 2,682) --
 after an upper tooth is lost the ridge resorbs and ToothFairy3's `UpperJaw` mask
 does not cover the remnant. Excluded on purpose; a finding, not an oversight.
 See `README.md`.
@@ -218,16 +218,23 @@ which flags you used; if you are re-running, run both and label them.
 
 So read this section as two different things depending on who you are. **If you
 are reproducing the run**, everything below still applies exactly as written.
-**If you are adding to it, nothing here needs a GPU**, and one item comes before
-all the others:
+**If you are adding to it, nothing here needs a GPU**, and the three CPU-only
+items this section used to list as outstanding were all run on 30-31 August
+under v3.4.0 (`REPORT.md` §C8m):
 
 | | |
 |---|---|
-| **Re-run localisation** | The anatomy masks were cut **7.2 mm** from the box the model was actually shown, so every existing localisation figure is withdrawn. `patch_masks` built its own patch centre and missed the quarter-shift `patch_centre` applies. Fixed in v3.4.0; CPU-only, no retraining. `REPORT.md` §C8k.1 |
-| The two CPU-only runs in §4e | The ceiling control is the last missing denominator for every enrichment figure; the geometric baseline has still never run on real scans |
+| **Localisation, re-run** | Done. The anatomy masks had been cut **7.2 mm** from the box the model was actually shown -- `patch_masks` built its own patch centre and missed the quarter-shift `patch_centre` applies -- so every localisation figure from before v3.4.0 stays withdrawn. Corrected enrichment: Grad-CAM 1.92, attention rollout 1.60, Integrated Gradients 1.45, GradientSHAP 0.69; pointing rate 0.000 for every method; no best localiser named |
+| **Geometric baseline** (§4e) | Done, on fold 0's test sites. Height MAE 6.60 mm against its own floor of 7.05; width 6.68 mm against a floor of 3.63, worse than predicting the median; it declines on 81.4% of sites |
+| **Ceiling control** | Done, from a script that is not in this repository. Integrated Gradients measures 1.45 against a ceiling of 1.46; the ceilings for the two token-resolution methods came back below chance and bound nothing |
 
-Randomisation and faithfulness never open a mask, so those results are
-unaffected and do not need re-running for this.
+**What is missing is the data, not a run.** The result files of that run were
+never transferred off the rented machine, so those figures are held as a report
+and not as rows. If you have that machine, or re-run any of the three, send the
+files in §6.
+
+Randomisation and faithfulness never open a mask, so those results were
+unaffected by the mask fault.
 
 
 ### 4a. Measure every site — about 30 min, CPU only
@@ -249,11 +256,18 @@ python -c "from src.data.site_dataset import load_sites; d=load_sites('artifacts
 709 need an implant | 413 not feasible
 ```
 
-**At v3.4.0 the label rules changed deliberately and it prints 6781 sites, 486
-patients, 705 needing an implant.** `measure_site` no longer clamps an
-impossible negative height to 0.0 mm; it returns NaN and the row is dropped as
-unmeasurable, which removes 6 trainable rows. The not-feasible count has not
-been re-recorded against the rebuilt table.
+**At v3.4.0 the label rules changed deliberately, and it prints:**
+
+```
+6781 sites 486 patients
+705 need an implant | 409 not feasible
+```
+
+`measure_site` no longer clamps an impossible negative height to 0.0 mm; it
+returns NaN and the row is dropped as unmeasurable, which removes 6 trainable
+rows. Recorded at v3.7.3 by rebuilding the table from the masks: it differs from
+the v3.0.1 table on ten rows, all of them a height of 0.0 that is now NaN, and
+on nothing else.
 
 Unlike the test count, this one is worth stopping over. It depends on the
 dataset and on the label rules, not on how much code has been written since,
@@ -397,10 +411,9 @@ python scripts/make_figures.py --config configs/sites.yaml --checkpoint artifact
 Add `--deterministic` to any of them if you need bit-reproducible attributions;
 it is slower.
 
-### 4e. Two CPU-only runs that need no GPU and no checkpoint queue
+### 4e. A CPU-only run that needs no GPU and no checkpoint queue
 
-Both can run on a laptop, or on the box while folds train. Neither costs GPU
-time, and between them they decide how much of the XAI section survives review.
+It can run on a laptop, or on the box while folds train, and costs no GPU time.
 
 **The geometric baseline.** A threshold-and-measure estimator scored through the
 same `regression_metrics` and `threshold_sensitivity` as the model, so the two
@@ -506,8 +519,8 @@ localisation results do not depend on any of this.
 scores exactly this**, so compare against it and never against zero:
 
 ```
-needs_implant       BCE floor 0.3348   AUROC floor 0.500   AP floor 0.1045
-available_height_mm MAE floor 6.91 mm  RMSE floor 7.97 mm
+needs_implant       BCE floor 0.3337   AUROC floor 0.500   AP floor 0.1040
+available_height_mm MAE floor 6.90 mm  RMSE floor 7.95 mm
 ridge_width_mm      MAE floor 3.58 mm  RMSE floor 4.40 mm
 ```
 
