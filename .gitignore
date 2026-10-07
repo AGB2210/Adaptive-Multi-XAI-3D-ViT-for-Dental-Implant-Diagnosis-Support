@@ -36,3 +36,6 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Archives written by scripts/pack_handback.py, and ones unpacked with --verify.
+handback/
