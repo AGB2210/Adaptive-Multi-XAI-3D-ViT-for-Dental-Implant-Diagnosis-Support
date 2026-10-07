@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import shutil
 import tempfile
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -78,6 +79,17 @@ def array_response(array: np.ndarray, **headers) -> Response:
          "Cache-Control": "no-store"}
     h.update({f"X-{k.replace('_', '-').title()}": str(v) for k, v in headers.items()})
     return Response(array.tobytes(), media_type="application/octet-stream", headers=h)
+
+
+def attachment(name: str) -> str:
+    """Content-Disposition for a download named after an uploaded file.
+
+    A header is Latin-1 at most, and a scan called `患者_001.nii.gz` made the
+    report download fail with a 500. The name goes out twice: percent-encoded
+    UTF-8, which every current browser uses, and a plain-ASCII fallback.
+    """
+    plain = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    return f"attachment; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
 @contextmanager
@@ -395,7 +407,7 @@ def create_app(settings: Settings) -> FastAPI:
                 truth.get("ridge_width_mm"), result["model"]["name"], "yes"])
         name = f"{meta['patient_id']}_implant_sites.csv"
         return Response(buf.getvalue(), media_type="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+                        headers={"Content-Disposition": attachment(name)})
 
     # ---- jobs -----------------------------------------------------------
     @app.get("/api/jobs/{job_id}")

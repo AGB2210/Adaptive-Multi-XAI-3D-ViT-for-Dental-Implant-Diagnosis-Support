@@ -80,6 +80,14 @@ def orientation_note(located: dict, minimum: float) -> str | None:
             f"the configured default orientation was kept.")
 
 
+def contradiction_note(stored: dict, turned: dict) -> str:
+    """What the result says when the head called the scan upside down both ways up."""
+    return (f"The localiser's orientation head says this scan is upside down as stored "
+            f"(P = {stored['flip_prob']:.2f}) and again once turned over "
+            f"(P = {turned['flip_prob']:.2f}). An answer that does not change with the scan "
+            f"says nothing about it: the configured default orientation was kept.")
+
+
 def analyse(settings: Settings, registry: ModelRegistry, store: ScanStore,
             scan_id: str, progress) -> dict:
     meta = store.meta(scan_id)
@@ -119,13 +127,24 @@ def analyse(settings: Settings, registry: ModelRegistry, store: ScanStore,
             # The localiser's orientation head disagrees with the default: the
             # scan is the other way up. Re-prepare rather than flip a z-scored
             # array, so the volume is produced by the one shared transform.
-            prepared = prepare_scan(
+            turned = prepare_scan(
                 folder / meta["image_file"], None,
                 clip_window=settings.clip_window, air_threshold=settings.air_threshold,
                 target_spacing=settings.spacing_mm, spacing_tolerance=settings.spacing_tolerance,
                 sign=-prepared.sign, sign_source="localiser orientation head")
-            located = localiser.locate(prepared.volume, settings.spacing_mm,
-                                       jaws=settings.site_jaws)
+            again = localiser.locate(turned.volume, settings.spacing_mm,
+                                     jaws=settings.site_jaws)
+            if again.get("flip"):
+                # Asked about the turned scan, a head that reads orientation
+                # answers "upright". One that says "upside down" both ways up is
+                # not reading this scan at all -- its validation accuracy was
+                # measured on the cohort, and this may be nothing like it -- and
+                # turning the scan over on its word is how a correctly stored
+                # scan gets measured upside down. This is also what nearly every
+                # wrong call on an upright scan looks like from here.
+                note = contradiction_note(located, again)
+            else:
+                prepared, located = turned, again
         sites = located["sites"]
         warnings += located.get("warnings", [])
         if note:

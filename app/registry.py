@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from app.settings import Settings
-from app.store import safe_name
+from app.store import read_text, safe_name, write_json
 from src.data.splits import fold_assignment, load_folds
 from src.inference.checkpoint import load_bundle
 from src.xai.runner import fold_from_checkpoint
@@ -81,7 +81,7 @@ class ModelRegistry:
             return None                  # not a name a model could have
         if not path.is_file():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(read_text(path))
 
     def list(self) -> list[dict]:
         out = []
@@ -96,7 +96,7 @@ class ModelRegistry:
 
     def _active(self) -> dict:
         path = self.root / "active.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        return json.loads(read_text(path)) if path.is_file() else {}
 
     def active(self, kind: str) -> dict | None:
         model_id = self._active().get(kind)
@@ -109,7 +109,7 @@ class ModelRegistry:
         with self._lock:
             active = self._active()
             active[meta["kind"]] = model_id
-            (self.root / "active.json").write_text(json.dumps(active, indent=2), encoding="utf-8")
+            write_json(self.root / "active.json", active, indent=2)
         return meta
 
     # ---- adding ---------------------------------------------------------
@@ -156,7 +156,7 @@ class ModelRegistry:
                 folds = load_folds(target / ROLE_NAMES["folds"])
                 if fold is not None and not 0 <= int(fold) < len(folds):
                     raise ValueError(f"fold {fold} is out of range for {len(folds)} folds")
-            self._meta_path(model_id).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            write_json(self._meta_path(model_id), meta, indent=2)
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
             raise
@@ -187,7 +187,7 @@ class ModelRegistry:
             for kind, mid in list(active.items()):
                 if mid == model_id:
                     del active[kind]
-            (self.root / "active.json").write_text(json.dumps(active, indent=2), encoding="utf-8")
+            write_json(self.root / "active.json", active, indent=2)
         shutil.rmtree(self.root / model_id, ignore_errors=True)
 
     # ---- loading for inference -----------------------------------------

@@ -227,6 +227,50 @@ class TestAnalysis:
         assert all(",10.0,5.0," in line for line in lines[1:])
         assert all(line.endswith(",yes") for line in lines[1:]), "screening-aid flag on every row"
 
+    def test_the_report_downloads_for_a_scan_whose_name_is_not_ascii(self, client, files):
+        """The report is named after the uploaded file, a header is Latin-1 at
+        most, and `患者_001.nii.gz` made the download a 500."""
+        assert add_model(client, files["ckpt"]).status_code == 201
+        res = client.post("/api/scans", files={
+            "image": ("患者_001.nii.gz", files["image"].read_bytes()),
+            "mask": (files["mask"].name, files["mask"].read_bytes())})
+        client.app_state.jobs.join()
+        res = client.get(f"/api/scans/{res.json()['scan']['id']}/report.csv")
+        assert res.status_code == 200, res.text
+        assert res.text.splitlines()[1].startswith("患者_001,")
+        disposition = res.headers["content-disposition"]
+        assert 'filename="___001_implant_sites.csv"' in disposition
+        assert "filename*=UTF-8''%E6%82%A3%E8%80%85_001_implant_sites.csv" in disposition
+
+    def test_a_result_is_rewritten_while_it_is_being_read(self, client, files):
+        """Windows refuses to replace a file another thread has open. A request
+        reading `result.json` as a job saved it failed the job with "Access is
+        denied"; 353 of 400 saves failed against two readers in a loop."""
+        import threading
+
+        scan_id = analysed(client, files)
+        store = client.app_state.store
+        result, stop, failures = store.result(scan_id), threading.Event(), []
+
+        def read():
+            while not stop.is_set():
+                try:
+                    store.result(scan_id)
+                except Exception as exc:  # noqa: BLE001 - any failure is the finding
+                    failures.append(exc)
+
+        readers = [threading.Thread(target=read) for _ in range(2)]
+        for t in readers:
+            t.start()
+        try:
+            for _ in range(40):
+                store.save_json(scan_id, "result.json", result)
+        finally:
+            stop.set()
+            for t in readers:
+                t.join()
+        assert not failures, failures[:1]
+
     def test_a_scan_without_mask_or_localiser_fails_with_a_reason(self, client, files):
         assert add_model(client, files["ckpt"]).status_code == 201
         res = upload(client, files["image"])
@@ -266,10 +310,12 @@ class TestAnalysis:
         correctly stored real scan upside down, and the result looked normal."""
         from src.models.localiser import Localiser
 
-        real = Localiser.predict
+        real, asked = Localiser.predict, []
 
         def says_upside_down(self, volume):
-            return {**real(self, volume), "flip_prob": 0.93}
+            # As stored, upside down; turned over, upright -- a head that reads.
+            asked.append(1)
+            return {**real(self, volume), "flip_prob": 0.93 if len(asked) == 1 else 0.04}
 
         monkeypatch.setattr(Localiser, "predict", says_upside_down)
         assert add_model(client, files["ckpt"]).status_code == 201
@@ -292,6 +338,29 @@ class TestAnalysis:
             assert result["scan"]["orientation_source"] == "configured default"
             assert "default orientation was kept" in said[0]
             assert ("50% correct" if accuracy is not None else "no measured accuracy") in said[0]
+
+    def test_a_head_that_says_upside_down_both_ways_up_is_not_obeyed(
+            self, client, files, tmp_path, monkeypatch):
+        """A head with a good validation record still answered "upside down"
+        whichever way up it was shown the scan, and the scan was turned over."""
+        from src.models.localiser import Localiser
+
+        real = Localiser.predict
+        monkeypatch.setattr(Localiser, "predict",
+                            lambda self, volume: {**real(self, volume), "flip_prob": 0.93})
+        assert add_model(client, files["ckpt"]).status_code == 201
+        loc = write_tiny_localiser(tmp_path / "localiser" / "localiser_best.pt",
+                                   val={"orientation_accuracy": 0.99})
+        assert add_model(client, loc, kind="localiser").status_code == 201
+
+        res = upload(client, files["image"])
+        client.app_state.jobs.join()
+        result = client.get(f"/api/scans/{res.json()['scan']['id']}").json()["result"]
+        assert result["scan"]["orientation_sign"] == client.app_state.settings.default_orientation_sign
+        assert result["scan"]["orientation_source"] == "configured default"
+        said = [w for w in result["warnings"] if "orientation head" in w]
+        assert len(said) == 1 and "again once turned over" in said[0], result["warnings"]
+        assert "default orientation was kept" in said[0]
 
     def test_a_site_model_is_not_accepted_as_a_localiser(self, client, files):
         res = add_model(client, files["ckpt"], kind="localiser")

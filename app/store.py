@@ -57,6 +57,38 @@ def safe_name(value: str) -> str:
     return value
 
 
+# Windows will not replace a file while another thread has it open, nor open one
+# in the instant it is being replaced. Both pass in well under a millisecond, so
+# the request that reads `result.json` as a job rewrites it waits instead of
+# failing the job with "Access is denied". Other systems never raise here.
+ATTEMPTS, PAUSE_S = 25, 0.02
+
+
+def _patiently(action):
+    for attempt in range(ATTEMPTS):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == ATTEMPTS - 1:
+                raise
+            time.sleep(PAUSE_S)
+
+
+def replace_file(tmp: Path, path: Path) -> None:
+    """Move a finished temporary file over `path`, so a reader sees old or new, never half."""
+    _patiently(lambda: tmp.replace(path))
+
+
+def read_text(path: Path) -> str:
+    return _patiently(lambda: path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, data, indent: int = 1) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(clean(data), indent=indent), encoding="utf-8")
+    replace_file(tmp, path)
+
+
 def nifti_suffix(filename: str) -> str:
     name = filename.lower()
     if name.endswith(".nii.gz"):
@@ -108,7 +140,7 @@ class ScanStore:
         out = []
         for d in self.root.iterdir() if self.root.is_dir() else []:
             if (d / "meta.json").is_file():
-                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                meta = json.loads(read_text(d / "meta.json"))
                 meta["analysed"] = (d / "result.json").is_file()
                 out.append(meta)
         return sorted(out, key=lambda m: m.get("created", 0), reverse=True)
@@ -120,15 +152,13 @@ class ScanStore:
     def save_json(self, scan_id: str, name: str, data: dict) -> None:
         path = self.root / safe_name(scan_id) / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(clean(data), indent=1), encoding="utf-8")
-        tmp.replace(path)
+        write_json(path, data)
 
     def load_json(self, scan_id: str, name: str) -> dict:
         path = self.dir(scan_id) / name
         if not path.is_file():
             raise FileNotFoundError(name)
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(read_text(path))
 
     def result(self, scan_id: str) -> dict | None:
         try:
@@ -141,7 +171,7 @@ class ScanStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.stem + ".tmp.npy")
         np.save(tmp, np.ascontiguousarray(array))
-        tmp.replace(path)
+        replace_file(tmp, path)
 
     def load_array(self, scan_id: str, name: str, mmap: bool = True) -> np.ndarray:
         path = self.dir(scan_id) / name
