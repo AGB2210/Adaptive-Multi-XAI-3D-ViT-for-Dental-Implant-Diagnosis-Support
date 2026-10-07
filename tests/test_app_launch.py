@@ -73,6 +73,24 @@ class TestThePort:
     def test_a_port_someone_is_listening_on_is_not_free(self, listener):
         assert not launcher.port_is_free(HOST, listener)
 
+    def test_a_port_whose_server_has_just_stopped_is_free(self):
+        """Restarting the app must land on the same port. On Linux a server that
+        had a connection leaves the port unbindable for a while unless the bind
+        asks to reuse it, and the app was sent to the next port instead."""
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((HOST, 0))
+        server.listen()
+        port = server.getsockname()[1]
+        client = socket.create_connection((HOST, port))
+        accepted, _ = server.accept()
+        assert not launcher.port_is_free(HOST, port), "it is still listening"
+        accepted.close()                 # the server closes first, as on shutdown
+        client.recv(1)
+        client.close()
+        server.close()
+        assert launcher.port_is_free(HOST, port)
+
     def test_the_next_free_port_is_used_when_another_program_holds_it(self, listener, capsys):
         port, already = launcher.choose_port(HOST, listener, explicit=False)
         assert already is None and port != listener

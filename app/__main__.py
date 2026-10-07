@@ -45,10 +45,19 @@ def browser_host(host: str) -> str:
 def port_is_free(host: str, port: int) -> bool:
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as sock:
+        # The question is "is anyone LISTENING here", and the two platforms need
+        # opposite options to ask it.
         if os.name == "nt":
             # Without this a Windows bind can succeed on a port another process
             # is already listening on.
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            # Without this a bind fails for a minute or so after a server on the
+            # port has stopped, while its closed connections linger. The server
+            # sets it for its own bind, so it would have started; this check
+            # said "in use by another program" and moved a restarted app to the
+            # next port. Measured on Linux. A listening socket still refuses it.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:
