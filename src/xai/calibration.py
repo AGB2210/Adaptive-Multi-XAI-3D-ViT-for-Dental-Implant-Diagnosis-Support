@@ -10,8 +10,7 @@ Temperature is fitted on the VALIDATION split only.
 from __future__ import annotations
 
 import numpy as np
-import torch
-import torch.nn.functional as F
+from scipy.optimize import minimize_scalar
 
 
 def _require_binary_targets(targets, who: str) -> None:
@@ -40,42 +39,55 @@ def _require_binary_targets(targets, who: str) -> None:
         )
 
 
-def fit_temperature(
-    logits: np.ndarray,
-    targets: np.ndarray,
-    max_iter: int = 200,
-    lr: float = 0.01,
-) -> float:
+# The search range for log T: temperatures from 0.01 to 100. A fit that ends on
+# either edge has no minimum inside it -- see `fit_temperature`.
+LOG_T_RANGE = (float(np.log(1e-2)), float(np.log(1e2)))
+
+
+def fit_temperature(logits: np.ndarray, targets: np.ndarray) -> float:
     """Single scalar temperature minimising BCE on the validation split.
 
     One temperature for all labels. The validation split is ~1,339 SITES from
     ~97 patients, and the positives that constrain the fit are the ~146 sites
     needing an implant -- so per-label temperatures would be fitted on far fewer
     independent observations than the site count suggests, and would overfit.
+
+    THE MINIMUM IS FOUND, NOT APPROACHED. This used to be LBFGS with a step of
+    0.01 and no line search, for 200 iterations. Each iteration then covers
+    about 1% of what is left, and 0.99^200 leaves 13%: measured on logits
+    miscalibrated by a known factor, the result stopped 10-20% short of the
+    optimum in log T -- 1.74 where the minimum was 1.93, 3.30 where it was 4.47
+    -- always on the side of T = 1, so a model looked better calibrated than it
+    was. BCE is convex in 1/T, so it has one minimum in log T and a bounded
+    scalar search finds it.
     """
     _require_binary_targets(targets, "fit_temperature")
 
-    z = torch.tensor(np.asarray(logits), dtype=torch.float32)
-    y = torch.tensor(np.asarray(targets), dtype=torch.float32)
+    z = np.asarray(logits, dtype=np.float64)
+    y = np.asarray(targets, dtype=np.float64)
 
-    log_t = torch.zeros(1, requires_grad=True)  # optimise log T to keep T > 0
-    optimizer = torch.optim.LBFGS([log_t], lr=lr, max_iter=max_iter)
+    def bce(log_t: float) -> float:
+        scaled = z / np.exp(log_t)
+        return float(np.mean(np.logaddexp(0.0, scaled) - y * scaled))
 
-    def closure():
-        optimizer.zero_grad()
-        loss = F.binary_cross_entropy_with_logits(z / log_t.exp(), y)
-        loss.backward()
-        return loss
-
-    optimizer.step(closure)
-    temperature = float(log_t.exp().item())
-    if not np.isfinite(temperature) or temperature <= 0:
+    fit = minimize_scalar(bce, bounds=LOG_T_RANGE, method="bounded", options={"xatol": 1e-9})
+    temperature = float(np.exp(fit.x))
+    if not np.isfinite(fit.fun) or not np.isfinite(temperature):
         raise ValueError(
-            f"temperature scaling did not converge: T = {temperature}. "
+            f"temperature scaling did not converge: T = {temperature}, loss = {fit.fun}. "
             f"Every downstream quantity -- calibrated probabilities, the "
             f"uncertainty score, the confidence gate -- becomes NaN, and a NaN "
             f"threshold compares False against everything, so the gate silently "
             f"never fires. Do not return this."
+        )
+    if min(fit.x - LOG_T_RANGE[0], LOG_T_RANGE[1] - fit.x) < 1e-3:
+        raise ValueError(
+            f"temperature scaling has no minimum on this split: the loss is still "
+            f"falling at T = {temperature:.3g}. Toward zero, the logits separate the "
+            f"labels perfectly or a class is absent -- usually a validation split "
+            f"too small to calibrate on. Toward infinity, the scores run against the "
+            f"labels. No temperature is returned, because any value here would be an "
+            f"edge of the search and not a fit."
         )
     return temperature
 

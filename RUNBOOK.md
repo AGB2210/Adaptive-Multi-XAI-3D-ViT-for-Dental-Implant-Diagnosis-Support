@@ -514,6 +514,16 @@ heads, and it was wrong silently:
 python -c "import json;d=json.load(open('artifacts_sites/calibration/calibration.json'));print(d['temperature'], d['ece_before'])"
 ```
 
+**A `calibration.json` from before v3.8.1 holds a temperature short of its
+optimum.** The fit took 200 steps of 1% and stopped 10-20% short in log T,
+always on the side of T = 1 -- measured against the exact minimum on logits
+miscalibrated by a known factor. Fold 0's recorded 1.2566 would be about 1.30
+by that shortfall; it has not been recomputed, because the validation logits
+are not held. Which cases the gate escalates does not change -- with one binary
+head the ordering of the margins is the same at any temperature. What changes
+is the temperature itself, `ece_after`, and every calibrated probability shown.
+Re-running `run_adaptive.py` refits it.
+
 `results_faithfulness.csv` is affected differently: the deletion and insertion
 curves for a millimetre target were read through a sigmoid, which cannot
 reverse one curve but can reorder two methods, since an AUC is an integral. The

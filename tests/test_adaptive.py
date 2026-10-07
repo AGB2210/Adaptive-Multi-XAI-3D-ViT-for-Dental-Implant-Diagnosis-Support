@@ -53,7 +53,37 @@ def test_temperature_recovers_a_known_overconfidence():
     targets = (rng.random(probs.shape) < probs).astype(float)
 
     temperature = fit_temperature(true_logits * 3.0, targets)
-    assert 2.0 < temperature < 4.5, temperature
+    assert 2.85 < temperature < 3.15, temperature
+
+
+@pytest.mark.parametrize("factor", [0.5, 1.25, 2.0, 5.0])
+def test_the_fitted_temperature_is_the_minimum_of_the_loss(factor):
+    """The fit used to stop 10-20% short of the optimum in log T, always on the
+    side of T = 1: 1.74 where the minimum was 1.93, 3.30 where it was 4.47. A
+    window of 2.0 to 4.5 around a true 3 could not see that."""
+    rng = np.random.default_rng(0)
+    clean = rng.normal(-2.2, 2.5, size=(1339, 1))
+    targets = (rng.random(clean.shape) < 1 / (1 + np.exp(-clean))).astype(float)
+    logits = clean * factor
+
+    def bce(t):
+        s = logits / t
+        return float(np.mean(np.logaddexp(0.0, s) - targets * s))
+
+    temperature = fit_temperature(logits, targets)
+    grid = temperature * np.exp(np.linspace(-0.5, 0.5, 2001))
+    best = grid[np.argmin([bce(t) for t in grid])]
+    assert abs(np.log(temperature / best)) < 1e-3, (temperature, best)
+    assert bce(temperature) <= min(bce(temperature * 0.98), bce(temperature * 1.02))
+
+
+def test_a_split_with_no_minimum_is_refused_not_given_an_edge():
+    """Logits that separate the labels perfectly have no finite temperature:
+    the loss keeps falling as T goes to zero."""
+    logits = np.array([[-3.0], [-2.0], [2.0], [3.0]])
+    targets = np.array([[0.0], [0.0], [1.0], [1.0]])
+    with pytest.raises(ValueError, match="no minimum"):
+        fit_temperature(logits, targets)
 
 
 def test_temperature_scaling_reduces_ece_on_overconfident_scores():
