@@ -3,6 +3,10 @@
 # every file shows as fully changed when edited on the other OS.
 * text=auto eol=lf
 
+# cmd reads a batch file line by line and mis-parses labels and `goto` in one
+# with LF endings. This is the one file that has to arrive with CRLF.
+*.bat text eol=crlf
+
 # Never touch binary artefacts.
 *.png  binary
 *.npy  binary

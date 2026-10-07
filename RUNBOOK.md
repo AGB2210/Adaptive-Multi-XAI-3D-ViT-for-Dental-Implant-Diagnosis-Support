@@ -585,6 +585,10 @@ artifacts_sites/localiser_runs/cv_fold*/best.pt       and eval_*.json beside eac
 `run_adaptive.py` was run on. A checkpoint without one still works in the app,
 and says on every result that it is uncalibrated and gated by a default.
 
+Back on your own machine the app is one click -- `start.bat` on Windows,
+`python -m app --open` anywhere -- and those files are picked in its **Models**
+dialog. `README.md`, "The app", has the rest.
+
 ---
 
 ## 7. Traps that have already cost this project time

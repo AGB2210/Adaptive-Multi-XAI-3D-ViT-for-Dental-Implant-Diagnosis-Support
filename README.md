@@ -37,6 +37,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Test suite | **Green** on Python 3.11 and 3.12, ruff clean — CI gates both |
 | XAI stack on the site task | **Done.** Randomisation and faithfulness stand; **localisation is withdrawn pending a re-run** — its anatomy masks were cut 7.2 mm from the box the model was shown |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
+| Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation") |
 | Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator is written and never run on real scans |
 | Guide sign-off on clinical thresholds | **Pending** |
 
@@ -87,12 +88,27 @@ broken rather than the problem being hard.
 
 ## The app
 
-A browser app that does what the model is for, on one scan at a time:
+A browser app that does what the model is for, on one scan at a time.
+
+**On Windows, double-click `start.bat`.** It finds Python, starts the server and
+opens the page. The first time, if the packages are missing, it builds a `.venv`
+in this folder and installs them -- reusing a PyTorch that is already installed
+rather than downloading a second one, and taking the CUDA build when an NVIDIA
+driver is present. **Ctrl+C, or closing its window, stops the server and frees
+the port**, also in the middle of an explanation.
+
+Anywhere else, or by hand:
 
 ```bash
 pip install -r requirements-app.txt
-python -m app --config configs/app.yaml        # http://127.0.0.1:8000
+python -m app --open                           # http://127.0.0.1:8000
 ```
+
+If the app is already running on the port, either way opens the page on that
+instance instead of failing. If another program holds the port, the next free
+one is used and printed -- unless `--port` named it, which is refused rather
+than quietly changed. Arguments after `start.bat` are passed through:
+`start.bat --port 9000 --device cpu`.
 
 1. **Models** — pick a site model's `.pt` in the browser, with any of its
    companions: `calibration.json` (temperature and the fitted confidence gate,
@@ -114,6 +130,10 @@ python -m app --config configs/app.yaml        # http://127.0.0.1:8000
    to attention rollout alone or to all four methods with agreement-weighted
    fusion, and the fusion weights, IG completeness error and SHAP standard
    error are shown with the maps.
+
+A scan whose analysis failed, or was cut short because the server stopped, keeps
+its uploaded files: the page says why it has no result and offers **Analyse
+again**. **Remove scan** deletes a scan and everything computed from it.
 
 **Nothing in the app is a second implementation.** An uploaded scan is prepared
 by `src/data/scan.prepare_volume`, the function `build_site_cache.py` writes the
@@ -323,6 +343,7 @@ src/xai/       rollout, IG, GradientSHAP, Grad-CAM, LIME (ablation only),
 src/inference/ the app's path: checkpoint loading, scan preparation, sites,
                prediction and verdicts, explanation
 app/           FastAPI server and the browser page (python -m app)
+start.bat      one click on Windows: environment, server, browser
 scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_xai, run_faithfulness, run_localization, run_adaptive,
                run_geometric_baseline, pool_cv, make_figures,

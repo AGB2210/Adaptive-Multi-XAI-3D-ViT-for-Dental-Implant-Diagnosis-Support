@@ -18,6 +18,8 @@ app:
   # Uploaded models and scans, and every result. Ignored by git (artifacts_*/).
   data_dir: artifacts_app
   host: 127.0.0.1
+  # If the app is already running here, starting it again opens that instance.
+  # If another program holds the port, the next free one is used and printed.
   port: 8000
   device: auto                 # auto | cuda | cpu
 
