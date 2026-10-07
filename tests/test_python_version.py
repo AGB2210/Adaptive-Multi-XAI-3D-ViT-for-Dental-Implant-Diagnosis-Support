@@ -55,6 +55,29 @@ def test_an_older_interpreter_is_refused_on_import(monkeypatch):
     assert src.MIN_PYTHON == (major, minor)
 
 
+def test_the_app_names_the_version_and_not_a_missing_package():
+    """`python -m app` on an old Python used to get as far as the first import
+    that failed -- usually a package -- and advised installing it."""
+    import subprocess
+
+    major, minor = src.MIN_PYTHON
+    code = (f"import sys, runpy; sys.version_info = ({major}, {minor - 1}, 9, 'final', 0); "
+            f"sys.argv = ['app']; runpy.run_module('app', run_name='__main__')")
+    done = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True)
+    assert done.returncode == 1
+    assert f"Python {major}.{minor} or newer is required" in done.stderr
+    assert "Traceback" not in done.stderr and "Missing Python package" not in done.stdout
+
+
+def test_start_bat_does_not_trust_an_environment_it_has_not_checked():
+    """A .venv built under the old minimum is still on disk after an update. It
+    must go through the same probe as any other Python, and be rebuilt."""
+    text = (REPO / "start.bat").read_text(encoding="ascii")
+    assert 'call :probe ".venv\\Scripts\\python.exe"' in text
+    assert 'set PY=".venv\\Scripts\\python.exe"\r\n' not in text.split(":packages")[0]
+    assert "--clear" in text
+
+
 def test_no_document_still_offers_the_dropped_version():
     """3.11 was supported once. A page that still says so sends someone to
     build an environment the code will refuse."""

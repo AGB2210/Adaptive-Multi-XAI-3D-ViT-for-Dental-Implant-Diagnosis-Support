@@ -34,7 +34,7 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Site labels built | **Done** — 6,781 mandibular sites, 486 patients |
 | Native-resolution cache builder, patch dataset, training wiring | **Done** — the full cache is built: 522 volumes, 26.4 GB, ~19 min on the rented box |
 | Pipeline run end to end on real scans | **Done** — all five XAI stages |
-| Test suite | **Green** on Python 3.12, ruff clean — the one version CI gates and the code accepts |
+| Test suite | **Green** on Python 3.12, ruff clean — the one version CI gates. Older is refused; newer is not tested |
 | XAI stack on the site task | **Done.** Randomisation and faithfulness stand; **localisation is withdrawn pending a re-run** — its anatomy masks were cut 7.2 mm from the box the model was shown |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
 | Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation") |

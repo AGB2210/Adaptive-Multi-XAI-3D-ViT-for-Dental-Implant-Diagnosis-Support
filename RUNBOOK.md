@@ -44,7 +44,7 @@ See `README.md`.
 | GPU | 16 GB VRAM | 96³ patches at batch 64. 24 GB lets you raise the batch size |
 | Disk | **80 GB free** | 28 GB dataset + 26.4 GB cache + checkpoints and headroom |
 | RAM | 32 GB | cache building holds whole volumes in memory |
-| Python | **3.12** | the one version gated in CI; the code refuses anything older |
+| Python | **3.12** | the one version gated in CI. Older is refused; newer is not tested |
 
 **The cache is 26.4 GB over 522 volumes and builds in about 19 minutes** —
 measured on the rented box during the fold-0 run, over the whole cohort. It is
@@ -72,13 +72,14 @@ against a few hundred real files before you rent to it.
 git clone https://github.com/AGB2210/Adaptive-Multi-XAI-3D-ViT-for-Dental-Implant-Diagnosis-Support.git capstone-code
 cd capstone-code
 git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)"
-python --version                      # must print 3.12
+python --version                      # 3.12
 python -m venv .venv && source .venv/bin/activate
 ```
 
 **Python 3.12, not whatever the image ships.** It is the only version the code
-is tested on, and every script refuses an older one on its first import. If
-`python --version` prints something else, build the environment from 3.12
+is tested on. Every pipeline script refuses an older one on its first import; a
+newer one runs but nothing gates it. If `python --version` prints something
+else, build the environment from 3.12
 instead of the last line above -- `conda create -n capstone python=3.12` and
 `conda activate capstone`, or `uv venv --python 3.12`.
 

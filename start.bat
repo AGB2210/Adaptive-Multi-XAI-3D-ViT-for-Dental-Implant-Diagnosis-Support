@@ -26,10 +26,15 @@ title Implant Site Screening
 
 rem ---- find Python: this folder's own environment first, then the system's --
 set "PY="
-if exist ".venv\Scripts\python.exe" set PY=".venv\Scripts\python.exe"
-if not defined PY call :probe python
+if exist ".venv\Scripts\python.exe" call :probe ".venv\Scripts\python.exe"
+if defined PY goto :run
+rem A .venv that fails the probe was built with a Python the app no longer runs
+rem on, or its Python has since been uninstalled. It is rebuilt, not used.
+if exist ".venv\Scripts\python.exe" set "STALE_VENV=1"
+call :probe python
 if not defined PY call :probe py -3
 if not defined PY goto :no_python
+if defined STALE_VENV goto :setup
 
 :run
 %PY% -m app --open %*
@@ -47,13 +52,26 @@ rem ---- first run: an environment in .venv, with only what is missing ---------
 :setup
 set "SETUP_DONE=1"
 echo.
+if defined STALE_VENV goto :rebuild
 echo  The app's Python packages are not installed yet. Setting them up in .venv.
 echo  This happens once. If PyTorch has to be downloaded it takes several minutes.
 echo.
 if exist ".venv\Scripts\python.exe" goto :packages
+set "VENV_FLAGS="
+goto :create
+
+:rebuild
+echo  The environment in .venv cannot be used: its Python is missing or older
+echo  than 3.12. Rebuilding it. If PyTorch has to be downloaded this takes
+echo  several minutes.
+echo.
+set "STALE_VENV="
+set "VENV_FLAGS=--clear"
+
+:create
 rem --system-site-packages: a PyTorch already installed for this Python is used
 rem as it is, instead of downloading a second copy of it.
-%PY% -m venv --system-site-packages .venv
+%PY% -m venv %VENV_FLAGS% --system-site-packages .venv
 if errorlevel 1 goto :setup_failed
 
 :packages

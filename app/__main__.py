@@ -120,6 +120,13 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
+        # First, so an unsupported Python is reported as that and not as
+        # whichever package happens to be missing from it.
+        import src  # noqa: F401
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from None
+
+    try:
         import uvicorn
 
         from app.server import create_app
