@@ -359,6 +359,7 @@ start.bat      one click on Windows: environment, server, browser
 scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_xai, run_faithfulness, run_localization, run_adaptive,
                run_geometric_baseline, pool_cv, make_figures,
+               compare_gradcam_tokens (needs no dataset),
                build_localiser_cache, train_localiser, eval_localiser
 ```
 
@@ -444,6 +445,30 @@ different network on a different task, and their ordering was not merely stale
 but reversed. The current values belong to the site model and are reported with
 their patient-clustered intervals in `RESULTS.md` §5 and `REPORT.md` §C9 — the
 two documents that also carry the caveats they must be read with.
+
+## What `gradcam` measures here
+
+This model classifies from the CLS token alone, and the project's Grad-CAM hooks
+the tokens *leaving* the last block. There the gradient is exactly zero on every
+patch token, so the map's channel weights are the CLS token's gradient and
+nothing a patch contributed: it is `ReLU(patch activation . CLS gradient)`, over
+activations the prediction does not depend on. **Every `gradcam` figure recorded
+by this project is that map**, and a paper should describe it that way and not
+as Grad-CAM in Selvaraju et al.'s sense.
+
+On the planted-signal task, where the right answer is known, it sits on chance:
+median enrichment 0.20 to 1.39 across eight trained models, with the worst
+deletion AUC of the four methods in every one. The usual construction for a
+CLS-pooled ViT -- the tokens *entering* the last block -- is registered as a
+separate method, `gradcam_input`. It is above chance in seven of the eight and
+is still the weaker of the two token-resolution methods: it beats attention
+rollout in none of them and returns an empty map in up to a third of cases.
+
+`gradcam` stays in the ensemble unchanged, because replacing it changes what
+every recorded figure means. `python scripts/compare_gradcam_tokens.py`
+reproduces the comparison in minutes with no dataset; `src/xai/gradcam.py` has
+the mechanism and the table. Scoring both on real scans is one flag on the XAI
+scripts (RUNBOOK 4d) and needs the checkpoints.
 
 ## Known limitation
 

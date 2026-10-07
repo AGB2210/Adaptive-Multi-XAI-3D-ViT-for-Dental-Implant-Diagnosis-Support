@@ -22,6 +22,10 @@ def build_method(name: str, model, device=None, **kwargs) -> SaliencyMethod:
         return GradientWeightedRollout(model, device, **kwargs)
     if name == "gradcam":
         return GradCAM3D(model, device, **kwargs)
+    if name == "gradcam_input":
+        # Grad-CAM on the tokens entering the last block. Not in the ensemble:
+        # every recorded `gradcam` figure is the other one. See gradcam.py.
+        return GradCAM3D(model, device, tokens="input", **kwargs)
     if name == "integrated_gradients":
         return IntegratedGradients(model, device, **kwargs)
     if name == "gradient_shap":

@@ -419,6 +419,19 @@ python scripts/make_figures.py --config configs/sites.yaml --checkpoint artifact
 Add `--deterministic` to any of them if you need bit-reproducible attributions;
 it is slower.
 
+**Score both Grad-CAMs if you are re-running any of these.** `gradcam`, the one
+every recorded figure was measured on, takes its channel weights from the CLS
+token's gradient alone and sits on chance on the planted-signal task;
+`gradcam_input` is the usual construction for a CLS-pooled ViT (`README.md`,
+"What `gradcam` measures here"). It is not in the default ensemble, so name it:
+
+```bash
+python scripts/run_localization.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --methods attention_rollout gradcam gradcam_input integrated_gradients gradient_shap
+```
+
+`run_faithfulness.py` takes the same `--methods`. The two maps are written under
+their own names, so neither replaces the other's rows.
+
 ### 4e. A CPU-only run that needs no GPU and no checkpoint queue
 
 It can run on a laptop, or on the box while folds train, and costs no GPU time.

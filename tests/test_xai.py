@@ -18,7 +18,8 @@ from src.xai.base import gaussian_blur3d, make_baseline, normalize01
 from src.xai.rollout import residual_normalize, rollout_from_attentions
 
 IMG = 32
-METHODS = ["attention_rollout", "grad_rollout", "gradcam", "integrated_gradients", "gradient_shap"]
+METHODS = ["attention_rollout", "grad_rollout", "gradcam", "gradcam_input",
+           "integrated_gradients", "gradient_shap"]
 
 
 @pytest.fixture(scope="module")
@@ -129,6 +130,76 @@ def test_gradcam_raw_is_token_space_without_cls(model, volume):
     method.attribute(volume, 0)
     grid = model.grid_size
     assert method.last_raw.numel() == grid[0] * grid[1] * grid[2]
+
+
+def _last_block_gradient(model, volume, target):
+    """(activations, gradient) of the tokens LEAVING the last block, each (T, D)."""
+    kept = {}
+    block = model.blocks[-1]
+    fwd = block.register_forward_hook(lambda m, i, o: kept.__setitem__("a", o))
+    bwd = block.register_full_backward_hook(lambda m, gi, go: kept.__setitem__("g", go[0]))
+    try:
+        model.zero_grad(set_to_none=True)
+        model(volume.clone().requires_grad_(True))[0, target].backward()
+    finally:
+        fwd.remove()
+        bwd.remove()
+        model.zero_grad(set_to_none=True)
+    return kept["a"].detach()[0], kept["g"].detach()[0]
+
+
+def test_the_default_gradcam_is_weighted_by_the_cls_gradient_alone(model, volume):
+    """The model reads the CLS token only, so leaving the last block no patch
+    token has any gradient. The default map's channel weights are the CLS
+    gradient over the token count, and nothing a patch contributed. Pinned so
+    the description in `gradcam.py` cannot drift from what is computed, and so
+    a change of pooling in the model shows up here."""
+    acts, grad = _last_block_gradient(model, volume, 2)
+    assert float(grad[1:].abs().sum()) == 0.0, "a patch token carries gradient: the model no longer pools on CLS"
+    assert float(grad[0].abs().sum()) > 0.0
+
+    expected = (acts * (grad[0] / grad.shape[0])).sum(dim=-1).clamp_min(0)[1:]
+    method = build_method("gradcam", model, torch.device("cpu"))
+    method.attribute(volume, 2)
+    assert torch.allclose(method.last_raw, expected, atol=1e-7)
+
+
+def test_gradcam_on_the_blocks_input_uses_gradients_the_patches_carry(model, volume):
+    """The usual remedy on a CLS-pooled ViT: the tokens entering the block,
+    which its attention still mixes into CLS."""
+    kept = {}
+
+    def keep(_module, args):
+        args[0].retain_grad()
+        kept["v"] = args[0]
+
+    handle = model.blocks[-1].register_forward_pre_hook(keep)
+    try:
+        model.zero_grad(set_to_none=True)
+        model(volume.clone().requires_grad_(True))[0, 2].backward()
+    finally:
+        handle.remove()
+        model.zero_grad(set_to_none=True)
+    tokens, grad = kept["v"].detach()[0], kept["v"].grad.detach()[0]
+    assert float(grad[1:].abs().sum()) > 0.0, "patch tokens entering the last block must carry gradient"
+
+    method = build_method("gradcam_input", model, torch.device("cpu"))
+    assert method.name == "gradcam_input" and method.tokens == "input"
+    assert build_method("gradcam", model, torch.device("cpu")).name == "gradcam"
+    saliency = method.attribute(volume, 2)
+    expected = (tokens[1:] * grad[1:].mean(dim=0)).sum(dim=-1).clamp_min(0)
+    assert torch.allclose(method.last_raw, expected, atol=1e-7)
+    assert saliency.shape == (IMG, IMG, IMG) and torch.isfinite(saliency).all()
+
+    default = build_method("gradcam", model, torch.device("cpu")).attribute(volume, 2)
+    assert not torch.allclose(saliency, default, atol=1e-4), "the two are different maps"
+    other = method.attribute(volume, 3)
+    assert not torch.allclose(saliency, other, atol=1e-4), "it is class-specific"
+
+
+def test_gradcam_refuses_an_unknown_token_source(model):
+    with pytest.raises(ValueError, match="tokens must be one of"):
+        build_method("gradcam", model, torch.device("cpu"), tokens="middle")
 
 
 # --------------------------------------------------------------------------
