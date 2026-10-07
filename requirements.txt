@@ -1,5 +1,5 @@
 # Adaptive Multi-XAI Vision Transformer — runtime dependencies
-# Verified working set: Python 3.11, torch 2.12.1+cu126, numpy 2.3.5
+# Verified working set: Python 3.12, torch 2.12.1+cu126, numpy 2.3.5
 #
 # Lower bounds, not pins: this has to install on a rented GPU box whose CUDA
 # wheel dictates the torch version. numpy is the exception -- see below.

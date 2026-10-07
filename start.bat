@@ -80,15 +80,15 @@ echo.
 goto :run
 
 :probe
-rem Sets PY to the command given if it is Python 3.11 or newer. Run rather than
+rem Sets PY to the command given if it is Python 3.12 or newer. Run rather than
 rem looked up: the `python` Windows ships is a stub that opens the Store.
-%* -c "import sys; raise SystemExit(sys.version_info < (3, 11))" >nul 2>nul
+%* -c "import sys; raise SystemExit(sys.version_info < (3, 12))" >nul 2>nul
 if not errorlevel 1 set PY=%*
 exit /b 0
 
 :no_python
 echo.
-echo  Python 3.11 or newer was not found.
+echo  Python 3.12 or newer was not found.
 echo  Install it from https://www.python.org/downloads/ and tick "Add python.exe
 echo  to PATH" in the installer, then run start.bat again.
 goto :hold

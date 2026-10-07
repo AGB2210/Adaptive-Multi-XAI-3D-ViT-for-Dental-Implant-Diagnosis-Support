@@ -27,20 +27,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # 3.11 is the verified set in requirements.txt; 3.12 is what the team runs
-    # locally. A rented GPU box gives you whichever its image ships, so both
-    # have to stay green or the handoff breaks on someone else's machine.
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-
+    # One interpreter, the one the team runs and requirements.txt was verified
+    # on. A second version in the matrix was a second set of compatibility
+    # faults to chase and nobody's machine. `src/__init__.py` refuses anything
+    # older, so a box whose image ships another Python fails on its first
+    # import rather than producing numbers on an interpreter nothing gates.
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
