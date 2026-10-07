@@ -52,13 +52,13 @@ def test_a_step_past_the_end_is_clamped_not_extrapolated():
 
 # --- gradient accumulation ----------------------------------------------------
 
-def _tiny_cfg(accum: int, lr: float = 0.1):
+def _tiny_cfg(accum: int, out_dir, lr: float = 0.1):
     return SimpleNamespace(
         seed=0,
         train=SimpleNamespace(
             epochs=1, batch_size=2, accum_steps=accum, lr=lr, weight_decay=0.0,
             warmup_epochs=0, grad_clip=0.0, amp=False, num_workers=0,
-            early_stop_patience=0, out_dir="artifacts/_test_loop",
+            early_stop_patience=0, out_dir=str(out_dir),
         ),
         eval=SimpleNamespace(bootstrap_n=0, bootstrap_ci=0.95),
     )
@@ -77,7 +77,7 @@ def _loader(x, y, batch_size):
     return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=False)
 
 
-def _train_once(accum: int, batch_size: int, monkeypatch, seed: int = 0):
+def _train_once(accum: int, batch_size: int, monkeypatch, out_dir, seed: int = 0):
     """One epoch with the LR schedule pinned flat.
 
     `train_epoch` sets the LR per MICRO-BATCH from `cosine_warmup(step)`, so an
@@ -97,26 +97,26 @@ def _train_once(accum: int, batch_size: int, monkeypatch, seed: int = 0):
     x = torch.randn(8, 4)
     y = (x.sum(1, keepdim=True) > 0).float()
 
-    trainer = Trainer(model, _tiny_cfg(accum), ["a"], device=torch.device("cpu"))
+    trainer = Trainer(model, _tiny_cfg(accum, out_dir), ["a"], device=torch.device("cpu"))
     trainer.train_epoch(_loader(x, y, batch_size), epoch=0, total_steps=4, warmup_steps=0)
     return start, model.fc.weight.detach().clone()
 
 
-def test_accumulation_matches_the_equivalent_single_step(monkeypatch):
+def test_accumulation_matches_the_equivalent_single_step(monkeypatch, tmp_path):
     """Four batches of 2 with accum=4 must move the weights like one batch of 8.
 
     If the loss were not divided by accum, or the optimiser stepped on the wrong
     batches, this diverges -- and nothing else in the run would say so.
     """
-    _, w_accum = _train_once(accum=4, batch_size=2, monkeypatch=monkeypatch)
-    _, w_single = _train_once(accum=1, batch_size=8, monkeypatch=monkeypatch)
+    _, w_accum = _train_once(accum=4, batch_size=2, monkeypatch=monkeypatch, out_dir=tmp_path)
+    _, w_single = _train_once(accum=1, batch_size=8, monkeypatch=monkeypatch, out_dir=tmp_path)
     assert torch.allclose(w_accum, w_single, atol=1e-6), (
         f"accumulated update {w_accum} differs from the single-batch update {w_single}")
 
 
-def test_accumulation_actually_moves_the_weights(monkeypatch):
+def test_accumulation_actually_moves_the_weights(monkeypatch, tmp_path):
     """Guard the guard: two identical no-ops would also pass the test above."""
-    start, end = _train_once(accum=4, batch_size=2, monkeypatch=monkeypatch)
+    start, end = _train_once(accum=4, batch_size=2, monkeypatch=monkeypatch, out_dir=tmp_path)
     assert not torch.allclose(start, end), "the epoch applied no update at all"
 
 
