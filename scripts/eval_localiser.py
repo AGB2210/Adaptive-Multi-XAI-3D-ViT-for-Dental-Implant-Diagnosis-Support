@@ -208,6 +208,12 @@ def main() -> None:
     if args.site_checkpoint:
         bundle = load_bundle(args.site_checkpoint, device, fallback_config=args.config)
         e2e = end_to_end(cfg, bundle, localiser, data, sites, device)
+        if e2e.empty:
+            raise SystemExit(
+                f"no {args.split} site could be scored end to end: none of the "
+                f"{len(data.patients)} patients has both a full-resolution volume under "
+                f"{cache_dir(cfg, primary_dataset(cfg))} and a usable site in "
+                f"{cfg.task.sites_csv}. Build the site cache (RUNBOOK 4b) first.")
         rules = {k: float(v) for k, v in vars(cfg.sites).items() if k.startswith("min_")}
         report = end_to_end_report(e2e, rules)
         e2e["extra_height_err"] = (np.abs(e2e.loc_height - e2e.true_height)
