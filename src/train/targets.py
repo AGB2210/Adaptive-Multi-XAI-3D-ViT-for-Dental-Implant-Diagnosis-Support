@@ -352,6 +352,47 @@ def threshold_sensitivity(true_mm: np.ndarray, pred_mm: np.ndarray, names: list[
     return rows
 
 
+def feasibility_report(true_mm: np.ndarray, pred_mm: np.ndarray, names: list[str],
+                       rules: dict, groups=None, n_boot: int = 0, ci: float = 0.95,
+                       seed: int = 0, jaw: str = "lower") -> dict:
+    """Agreement at the configured rule, which way it fails, and its interval.
+
+    `threshold_sensitivity` gives agreement across a sweep. This is the one row
+    the project's headline rests on, with the two things that row never
+    carried. THE DIRECTION: a site called feasible that measures infeasible is
+    the unsafe error beside a nerve, and one agreement figure hides whether
+    the disagreements lean that way. THE INTERVAL: resampled over `groups`
+    (patients), because fourteen sites from one jaw are not fourteen draws.
+
+    Rows either side could not measure are left out, and `n` says how many
+    remain.
+    """
+    want = derived_feasible(true_mm, names, rules, jaw)
+    got = derived_feasible(pred_mm, names, rules, jaw)
+    seen = np.isfinite(want) & np.isfinite(got)
+    want, got = want[seen], got[seen]
+    if not len(want):
+        return {"n": 0, "agreement": float("nan")}
+    out = {
+        "n": int(len(want)),
+        "measured_feasible_rate": float(want.mean()),
+        "predicted_feasible_rate": float(got.mean()),
+        "agreement": float((want == got).mean()),
+        "called_feasible_when_not": float(((got == 1) & (want == 0)).mean()),
+        "called_infeasible_when_feasible": float(((got == 0) & (want == 1)).mean()),
+    }
+    if n_boot:
+        from src.train.metrics import bootstrap_ci
+
+        kept = None if groups is None else np.asarray(groups)[seen]
+        for key, fn in (
+                ("agreement", lambda a, b: float((a == b).mean())),
+                ("called_feasible_when_not", lambda a, b: float(((b == 1) & (a == 0)).mean()))):
+            _, lo, hi = bootstrap_ci(want, got, fn, n_boot, ci, seed, kept)
+            out[f"{key}_ci"] = [lo, hi]
+    return out
+
+
 def format_regression(metrics: dict, title: str = "") -> str:
     """One table, millimetres, floor beside every value."""
     lines = []

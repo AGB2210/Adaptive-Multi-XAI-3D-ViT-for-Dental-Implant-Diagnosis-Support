@@ -17,6 +17,7 @@ from src.train.targets import (
     HybridLoss,
     TargetSpec,
     derived_feasible,
+    feasibility_report,
     no_information_regression,
     regression_metrics,
     spec_from_config,
@@ -364,6 +365,35 @@ def test_n_reports_the_sites_both_sides_could_measure():
     pred[:4] = np.nan
     row = threshold_sensitivity(true, pred, NAMES, RULES, sweep=(12.0,))[0]
     assert row["n"] == 6
+
+
+def test_the_feasibility_report_says_which_way_it_fails():
+    """One agreement figure hides whether the misses lean toward calling a site
+    feasible that is not -- the unsafe direction beside a nerve."""
+    true = np.array([[15.0, 7.0], [15.0, 7.0], [9.0, 7.0], [9.0, 7.0], [np.nan, 7.0]])
+    pred = np.array([[15.0, 7.0], [9.0, 7.0], [15.0, 7.0], [15.0, 7.0], [15.0, 7.0]])
+    r = feasibility_report(true, pred, NAMES, RULES)
+    assert r["n"] == 4, "the row with no measured height is left out"
+    assert r["agreement"] == 0.25
+    assert r["called_feasible_when_not"] == 0.5
+    assert r["called_infeasible_when_feasible"] == 0.25
+    assert r["measured_feasible_rate"] == 0.5 and r["predicted_feasible_rate"] == 0.75
+    assert feasibility_report(true[4:], pred[4:], NAMES, RULES)["n"] == 0
+
+
+def test_the_feasibility_interval_is_resampled_over_patients():
+    """Two patients, one always right and one always wrong: resampling patients
+    can draw all of either, so the interval has to span 0 to 1. Resampling the
+    forty rows would put it tightly around one half."""
+    true = np.tile(np.array([[15.0, 7.0]]), (40, 1))
+    pred = true.copy()
+    pred[20:, 0] = 9.0
+    groups = np.repeat(["a", "b"], 20)
+    r = feasibility_report(true, pred, NAMES, RULES, groups=groups, n_boot=400)
+    assert r["agreement"] == 0.5
+    assert r["agreement_ci"] == [0.0, 1.0]
+    rows = feasibility_report(true, pred, NAMES, RULES, n_boot=400)
+    assert rows["agreement_ci"][0] > 0.25 and rows["agreement_ci"][1] < 0.75
 
 
 def test_validation_skill_names_the_heads_that_did_not_contribute():

@@ -346,6 +346,14 @@ Then pool them, so every case is predicted once by a model that never saw it:
 python scripts/pool_cv.py --config configs/sites.yaml --folds 5
 ```
 
+It writes `artifacts_sites/cv_pooled_metrics.json` and `cv_predictions.csv`.
+Besides the pooled AUROC, the json holds the pooled millimetre errors with a
+patient-clustered interval on each MAE, and **feasibility agreement at the
+configured rule** -- over every site, and over the sites that need an implant --
+with its interval and the share of sites called feasible that measure
+infeasible. That last table is the project's headline result; before v3.8.0 it
+was printed per fold and saved nowhere, so bring this file back.
+
 `--model cnn3d` trains the CNN baseline through the same loop. **It is not on
 the run list.** Fold 0 was measured and the CNN is ahead there; architecture
 selection is outside this project's scope, since the contribution is the

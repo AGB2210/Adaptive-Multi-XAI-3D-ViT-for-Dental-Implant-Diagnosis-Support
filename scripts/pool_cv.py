@@ -45,8 +45,10 @@ from src.train.loop import load_checkpoint_file  # noqa: E402
 from src.train.metrics import bootstrap_ci, evaluate, format_metrics  # noqa: E402
 from src.train.targets import (  # noqa: E402
     TargetSpec,
+    feasibility_report,
     format_regression,
     regression_metrics,
+    threshold_sensitivity,
     to_report_units,
 )
 from src.utils.config import artifacts_dir, load_config  # noqa: E402
@@ -262,12 +264,58 @@ def main() -> None:
                                 f"VIT3D -- POOLED across {len(folds)} test folds"))
 
     mm_names = regression_names_for(cfg)
+    millimetres: dict = {}
     if mm_names:
         # Every case predicted once, by a model that never saw it -- the same
         # discipline as the classification pooling, in millimetres.
-        pooled_mm = regression_metrics(y_true[:, n_bin:], y_prob[:, n_bin:], mm_names)
+        true_mm, pred_mm = y_true[:, n_bin:], y_prob[:, n_bin:]
+        pooled_mm = regression_metrics(true_mm, pred_mm, mm_names)
+        n_boot, level = cfg.eval.bootstrap_n, cfg.eval.bootstrap_ci
+        if n_boot:
+            for j, name in enumerate(mm_names):
+                seen = np.isfinite(true_mm[:, j]) & np.isfinite(pred_mm[:, j])
+                _, lo, hi = bootstrap_ci(true_mm[seen, j], pred_mm[seen, j],
+                                         lambda t, p: float(np.abs(t - p).mean()),
+                                         n_boot, level, cfg.seed + j, groups[seen])
+                pooled_mm[name]["mae_ci"] = [lo, hi]
         print(format_regression(pooled_mm,
                                 f"pooled across {len(folds)} test folds -- millimetres"))
+        for name in mm_names:
+            if "mae_ci" in pooled_mm[name]:
+                lo, hi = pooled_mm[name]["mae_ci"]
+                print(f"{name:24}MAE {level:.0%} CI [{lo:.3f}, {hi:.3f}] mm, patient-clustered")
+
+        # THE HEADLINE, and until now it was the one result this script did not
+        # produce: feasibility agreement was quoted as a range of five per-fold
+        # figures, and the pooled millimetre errors were printed
+        # here and written nowhere. Both go in the json, with the interval and
+        # the direction of the disagreements. The second group is the clinical
+        # one -- a site with a tooth in it is not a candidate for an implant.
+        rules = dict(vars(cfg.sites))
+        jaw = (list(getattr(cfg.task, "site_jaws", ["lower"])) or ["lower"])[0]
+        feasibility = {"all_sites": feasibility_report(
+            true_mm, pred_mm, mm_names, rules, groups, n_boot, level, cfg.seed, jaw)}
+        if "needs_implant" in binary_names:
+            need = y_true[:, binary_names.index("needs_implant")] == 1
+            feasibility["sites_that_need_an_implant"] = feasibility_report(
+                true_mm[need], pred_mm[need], mm_names, rules, groups[need],
+                n_boot, level, cfg.seed, jaw)
+        print("\nFEASIBILITY AT THE CONFIGURED RULE, pooled")
+        print(f"{'':28}{'n':>6}{'agreement':>11}{level:>9.0%} CI{'':7}"
+              f"{'feasible when not':>19}{'infeasible when feasible':>26}")
+        for title, r in feasibility.items():
+            if not r["n"]:
+                continue
+            lo, hi = r.get("agreement_ci", [float("nan")] * 2)
+            print(f"{title.replace('_', ' '):28}{r['n']:>6}{r['agreement']:>11.3f}"
+                  f"   [{lo:.3f}, {hi:.3f}]{r['called_feasible_when_not']:>19.3f}"
+                  f"{r['called_infeasible_when_feasible']:>26.3f}")
+        millimetres = {
+            "regression": pooled_mm,
+            "threshold_sensitivity": threshold_sensitivity(true_mm, pred_mm, mm_names,
+                                                           rules, jaw=jaw),
+            "feasibility": feasibility,
+        }
 
     macros = [f["macro_auroc"] for f in per_fold]
     print(f"\nper-fold macro AUROC: {', '.join('%.4f' % m for m in macros)}")
@@ -277,6 +325,7 @@ def main() -> None:
     out_path = Path(args.out or adir / "cv_pooled_metrics.json")
     out_path.write_text(json.dumps({
         "pooled": pooled,
+        **millimetres,
         "per_fold": per_fold,
         "n_cases": len(pooled_ids),
         # The count every interval in `pooled` actually rests on. A reader
