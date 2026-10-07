@@ -98,6 +98,22 @@ class TestModels:
             res = client.get(path)
             assert res.status_code == 200 and res.headers["cache-control"] == "no-cache", path
 
+    def test_another_sites_page_cannot_change_anything(self, client, files):
+        """A form POST to 127.0.0.1 needs nobody's permission, so the server has to
+        look at who the browser says it is acting for."""
+        handles = [("files", (files["ckpt"].name, files["ckpt"].read_bytes()))]
+        foreign = client.post("/api/models", files=handles, data={"kind": "site"},
+                              headers={"Origin": "http://elsewhere.example"})
+        assert foreign.status_code == 403
+        assert client.get("/api/models").json() == []
+        own = client.post("/api/models", files=handles, data={"kind": "site"},
+                          headers={"Origin": "http://testserver"})
+        assert own.status_code == 201, own.text
+        model_id = own.json()["id"]
+        assert client.delete(f"/api/models/{model_id}",
+                             headers={"Origin": "http://elsewhere.example"}).status_code == 403
+        assert client.get("/api/status", headers={"Origin": "http://elsewhere.example"}).status_code == 200
+
     def test_a_model_and_its_companions_are_kept_and_activated(self, client, files):
         res = add_model(client, files["ckpt"], files["cal"], files["metrics"])
         assert res.status_code == 201, res.text
@@ -220,6 +236,40 @@ class TestAnalysis:
             assert s["verdict"]["status"]
         assert any("localiser" in w for w in result["warnings"]), \
             "an image-only result must say its sites were not measured from a mask"
+
+    @pytest.mark.parametrize("accuracy, obeyed", [(1.0, True), (0.5, False), (None, False)])
+    def test_the_orientation_head_is_obeyed_only_when_it_has_earned_it(
+            self, client, files, tmp_path, monkeypatch, accuracy, obeyed):
+        """A three-epoch smoke localiser, at chance on orientation, turned a
+        correctly stored real scan upside down, and the result looked normal."""
+        from src.models.localiser import Localiser
+
+        real = Localiser.predict
+
+        def says_upside_down(self, volume):
+            return {**real(self, volume), "flip_prob": 0.93}
+
+        monkeypatch.setattr(Localiser, "predict", says_upside_down)
+        assert add_model(client, files["ckpt"]).status_code == 201
+        val = {} if accuracy is None else {"orientation_accuracy": accuracy}
+        loc = write_tiny_localiser(tmp_path / "localiser" / "localiser_best.pt", val=val)
+        assert add_model(client, loc, kind="localiser").status_code == 201
+
+        res = upload(client, files["image"])
+        client.app_state.jobs.join()
+        result = client.get(f"/api/scans/{res.json()['scan']['id']}").json()["result"]
+        default = client.app_state.settings.default_orientation_sign
+        said = [w for w in result["warnings"] if "orientation head" in w]
+        assert len(said) == 1 and "P = 0.93" in said[0], result["warnings"]
+        if obeyed:
+            assert result["scan"]["orientation_sign"] == -default
+            assert result["scan"]["orientation_source"] == "localiser orientation head"
+            assert "100% correct" in said[0] and "turned over" in said[0]
+        else:
+            assert result["scan"]["orientation_sign"] == default
+            assert result["scan"]["orientation_source"] == "configured default"
+            assert "default orientation was kept" in said[0]
+            assert ("50% correct" if accuracy is not None else "no measured accuracy") in said[0]
 
     def test_a_site_model_is_not_accepted_as_a_localiser(self, client, files):
         res = add_model(client, files["ckpt"], kind="localiser")

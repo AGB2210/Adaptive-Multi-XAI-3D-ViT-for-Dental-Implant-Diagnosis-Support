@@ -14,9 +14,10 @@ import shutil
 import tempfile
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -117,6 +118,24 @@ def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(title="Implant site screening", version=version(), lifespan=lifespan)
     app.state.settings, app.state.registry = settings, registry
     app.state.store, app.state.jobs = store, jobs
+
+    @app.middleware("http")
+    async def same_origin_only(request: Request, call_next):
+        """Refuse a change that another site's page asked this browser to make.
+
+        A page on any site can make the browser POST a form to 127.0.0.1 -- a
+        file upload needs no permission from the server, only the response is
+        withheld -- so without this any open tab could add a scan or a model
+        to the app. The browser names the page it is acting for in `Origin`;
+        the app's own page always matches the address it was reached at.
+        Requests with no `Origin` (curl, scripts, tests) are not a browser
+        acting for someone else and pass.
+        """
+        origin = request.headers.get("origin")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
+            if urlsplit(origin).netloc != request.headers.get("host"):
+                return JSONResponse({"detail": "request from another site refused"}, 403)
+        return await call_next(request)
 
     def save_upload(upload: UploadFile) -> Path:
         fd, name = tempfile.mkstemp(dir=tmp_root)
