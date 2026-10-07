@@ -37,7 +37,8 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | Test suite | **Green** on Python 3.12, ruff clean — the one version CI gates. Older is refused; newer is not tested |
 | XAI stack on the site task | **Done.** Randomisation and faithfulness stand. **Localisation was re-run after the mask fix** (v3.4.0; the earlier figures, scored on masks cut 7.2 mm from the box the model was shown, stay withdrawn): enrichment against the canal is Grad-CAM 1.92, attention rollout 1.60, Integrated Gradients 1.45 and GradientSHAP 0.69, where 1.0 is chance. The pointing rate is 0.000 for every method and Grad-CAM's interval overlaps rollout's, so no best localiser is named |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
-| Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation") |
+| Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation"). **It has not yet been run on a real checkpoint**: none has left the machine that trained it |
+| Hand-back from a GPU run | **Rehearsed end to end.** Every command of RUNBOOK 4 was run on 14 scans, the result packed by `pack_handback.py`, verified, and loaded into the app, which analysed a real scan with and without its mask. Those are one-epoch models; the rehearsal proves the files fit, and says nothing about a result |
 | Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator was run on fold 0's test sites: height MAE 6.60 mm against its own floor of 7.05, width 6.68 mm against a floor of 3.63 — worse than predicting the median — and it declines to answer on 81.4% of sites |
 | Result files | The five-fold and v3.4.0 figures in this table are quoted from the report of the 30–31 August run (`REPORT.md` §C8i, §C8m). That run's result files were never transferred off the rented machine; only fold 0's rows are held, on the `fold0-results` branch |
 | Guide sign-off on clinical thresholds | **Pending** |
@@ -110,6 +111,17 @@ instance instead of failing. If another program holds the port, the next free
 one is used and printed -- unless `--port` named it, which is refused rather
 than quietly changed. Arguments after `start.bat` are passed through:
 `start.bat --port 9000 --device cpu`.
+
+**Where the models come from.** A GPU run ends with `python
+scripts/pack_handback.py` (RUNBOOK 6), which loads every checkpoint the way this
+app will and packs what it accepts. On the receiving machine,
+
+```bash
+python scripts/pack_handback.py --verify path/to/capstone_handback_v<version>.tar.gz
+```
+
+checks every file against its checksum, loads each checkpoint with this
+machine's PyTorch, and prints which files to pick below for each fold.
 
 1. **Models** — pick a site model's `.pt` in the browser, with any of its
    companions: `calibration.json` (temperature and the fitted confidence gate,
@@ -360,6 +372,7 @@ scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_xai, run_faithfulness, run_localization, run_adaptive,
                run_geometric_baseline, pool_cv, make_figures,
                compare_gradcam_tokens (needs no dataset),
+               pack_handback (check a run against the app, pack it, verify it),
                build_localiser_cache, train_localiser, eval_localiser
 ```
 

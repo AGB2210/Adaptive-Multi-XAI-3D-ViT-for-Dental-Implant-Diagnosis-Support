@@ -114,6 +114,21 @@ pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 ```
 
+**What has to match the machine the files go back to, and what does not.**
+The checkpoints are opened there by the inference app, on a different build of
+everything. Three things carry across, and they are the only three:
+
+| | On the machine that wrote this | What you need |
+|---|---|---|
+| Python | 3.12.10 | **3.12**, any patch release |
+| PyTorch | 2.12.1, CUDA 12.6 | **2.2 or newer, any CUDA build.** A checkpoint is a dictionary of tensors and plain numbers, which every such version reads and writes alike |
+| NumPy | 2.3.5 | **2.0 or newer** -- `requirements.txt` already insists |
+
+You do not need to match the rest, and you do not need to report any of it:
+section 6's pack command writes your Python, PyTorch, CUDA, GPU and package
+versions into the archive, and the receiving machine loads every checkpoint
+with its own build before anyone relies on one.
+
 Point the code at the dataset. **No path is committed anywhere in this repo**;
 this env var is the only way it finds data.
 
@@ -189,6 +204,15 @@ python scripts/train.py --config configs/sites_smoke.yaml --num-workers 0
 python scripts/run_xai.py --config configs/sites_smoke.yaml --checkpoint artifacts_sites/runs/vit3d/best.pt
 ```
 
+```bash
+python scripts/pack_handback.py --check-only
+```
+
+That last one loads the smoke checkpoint the way the app will, and it must
+report `0 problem(s)` with `runs/vit3d/best.pt` under `ok`. If the app would
+refuse a checkpoint this machine writes, this is where you find out, for free.
+The long `MISSING` list is expected: the smoke gate trains no fold.
+
 > **Read the exit codes, not the tables.** This is 14 scans for 1 epoch. Its
 > AUROC, its deletion curves and its enrichment numbers are all noise, and
 > quoting any of them would be a mistake. It exists only to prove the pipeline
@@ -202,9 +226,94 @@ later be mistaken for results.
 
 ## 4. The real run
 
-**Most of this has already been run once.** All five folds are trained and
-pooled, the XAI suite is complete, and a CNN baseline was measured on fold 0.
-That run cost about ₹455 and its outputs live on the box that produced them.
+### What this run is for
+
+The August run trained all five folds and ran every analysis, and what came
+back was a report. The checkpoints and the result files stayed on the rented
+machine. **This run exists to bring files back**, in three groups:
+
+| | What | Why it is wanted |
+|---|---|---|
+| 1 | The five site checkpoints, each with its companion files | The inference app loads them (`README.md`, "The app"). It has never been run on a real checkpoint |
+| 2 | A trained site localiser, with its evaluation | The app's path for a scan with no mask. The localiser has never been trained on the cohort |
+| 3 | Every result file, as rows | The paper's tables are transcribed from a report. Twice a transcribed figure has failed when recomputed |
+
+Section 6 packs all three with one command, after checking that the app will
+accept every checkpoint. **Read section 6 before you start**, not when you
+finish: it is what decides whether the run was worth its cost.
+
+**Every command in this section has been run end to end, in this order, at this
+version** -- on the fourteen scans a laptop holds, one epoch per fold, twenty
+minutes in all. The archive it produced was verified on the receiving side and
+loaded into the app, which analysed a real scan with its mask and without. So
+the sequence is known to run and the files are known to fit; what a laptop
+cannot tell you is how long each step takes at full size, and where this page
+gives a duration it says where the figure came from.
+
+### Which of two starting points you are at
+
+**A. You still have the August machine, or a copy of its `artifacts_sites/`.**
+Do not retrain and do not rebuild the cache. Update the code and keep the
+directory:
+
+```bash
+git fetch --tags && git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)" && cat VERSION
+```
+
+```bash
+pip install -r requirements.txt
+```
+
+```bash
+python scripts/pack_handback.py --check-only
+```
+
+The last line lists what is there, whether the app accepts each checkpoint, and
+what is missing. Then run only what is missing: the `pool_cv.py` line of 4c, all
+of 4d, 4e, 4f, and section 6.
+
+Three facts make that sound, each checked rather than assumed:
+
+- **The labels are the same.** The table was rebuilt from the masks with the
+  current code: 6,781 sites, 486 patients, 705 positives -- the figures the
+  August run pooled over.
+- **The cache is the same.** `build_site_cache.py` writes its settings beside
+  the volumes and refuses a directory built with different ones; those settings
+  have not changed since v3.4.0, and the transform is the one function the
+  cache build and the app now share.
+- **The checkpoints load.** A checkpoint from before v3.5.0 carries no
+  `model_config`, so the app takes `num_heads` from `configs/app.yaml` and
+  checks every other field against the weight shapes. `--check-only` tells you
+  which case each file is in.
+
+`cv_pooled_metrics.json` and any `calibration.json` on that machine are from
+older code and must be regenerated -- `--check-only` flags both. Neither needs
+a retrain: `pool_cv.py` needs the five checkpoints, `run_adaptive.py` one.
+
+**B. That machine is gone.** Start at 4a and run everything in order. The new
+checkpoints will not reproduce August's to the last digit -- GPU training is
+not bit-reproducible -- so every number in the paper is then replaced by this
+run's, which is the reason section 6 asks for all of it and not a subset.
+
+### If the budget runs short, in this order
+
+1. **Fold 0, complete.** `cv_fold0/best.pt`, then `run_adaptive.py` on it (its
+   `calibration.json`), then the fold-0 localiser and its evaluation (4f, with
+   `0` in place of the loop). That is the smallest set the app is whole with:
+   one site model and one localiser that have both never seen fold 0's test
+   patients.
+2. **The rows.** The other four folds, `pool_cv.py`, and 4d.
+3. **Calibration for folds 1-4**, minutes each (4d), and **localisers for folds
+   1-4**. The first localiser fold tells you what the rest will cost; it has
+   never been timed on real hardware.
+
+A partial run is worth sending. Section 6's command states what is missing and
+what each absence costs, so nobody has to work it out from a file list.
+
+### What was already settled, and one question that was not
+
+All five folds were trained and pooled in August, the XAI suite was run, and a
+CNN baseline was measured on fold 0. That run cost about ₹455.
 
 **A faithfulness re-run was done with a mean baseline, and WHICH FLAGS produced
 it is unresolved.** It was reported as `--baseline mean --score deviation`, but
@@ -230,8 +339,7 @@ under v3.4.0 (`REPORT.md` §C8m):
 
 **What is missing is the data, not a run.** The result files of that run were
 never transferred off the rented machine, so those figures are held as a report
-and not as rows. If you have that machine, or re-run any of the three, send the
-files in §6.
+and not as rows -- which is group 3 above.
 
 Randomisation and faithfulness never open a mask, so those results were
 unaffected by the mask fault.
@@ -419,6 +527,29 @@ python scripts/make_figures.py --config configs/sites.yaml --checkpoint artifact
 Add `--deterministic` to any of them if you need bit-reproducible attributions;
 it is slower.
 
+**Run them in that order.** `run_adaptive.py` reads `xai_runtime.csv`, which
+`run_xai.py` writes; without it the Pareto table is skipped.
+
+**Every one of these overwrites its own output.** `results_faithfulness.csv` is
+one file whichever flags produced it, so a second faithfulness run replaces the
+first. Rename a file as soon as its run finishes if another run of the same
+script is coming -- section 6 packs anything named `results_<kind>*.csv`:
+
+```bash
+mv artifacts_sites/results_faithfulness.csv artifacts_sites/results_faithfulness_default.csv
+```
+
+**Then calibrate the other four folds, which takes minutes.** The app shows a
+calibrated probability and routes on a fitted gate only for a checkpoint with a
+`calibration.json` beside it, and the full `run_adaptive.py` above writes one
+for fold 0 alone. `--calibration-only` fits the temperature and the gate on
+that fold's validation split, writes the file beside the checkpoint, and stops
+before the hour-long sweep:
+
+```bash
+for k in 1 2 3 4; do python scripts/run_adaptive.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold$k/best.pt --calibration-only; done
+```
+
 **Score both Grad-CAMs if you are re-running any of these.** `gradcam`, the one
 every recorded figure was measured on, takes its channel weights from the CLS
 token's gradient alone and sits on chance on the planted-signal task;
@@ -483,12 +614,27 @@ Reads the site cache from 4b, so it takes minutes; under a gigabyte for the
 whole cohort at 1.2 mm.
 
 ```bash
-for k in 0 1 2 3 4; do python scripts/train_localiser.py --config configs/localiser.yaml --fold $k; done
+python scripts/train_localiser.py --config configs/localiser.yaml --fold 0
+```
+
+**Time that one before starting the rest.** The localiser has only ever been
+trained for three epochs on fourteen scans, so what a fold costs on real
+hardware is not known: up to 80 epochs over about 290 volumes of 128 x 128 x 80,
+stopping early after 15 without improvement. It logs one line per epoch with
+its seconds; multiply the first few by 80 for the ceiling. `--num-workers` is
+not a flag here -- if the box's `/dev/shm` is small (see 4b), set
+`localiser.num_workers: 0` in `configs/localiser.yaml` first.
+
+```bash
+for k in 1 2 3 4; do python scripts/train_localiser.py --config configs/localiser.yaml --fold $k; done
 ```
 
 ```bash
 for k in 0 1 2 3 4; do python scripts/eval_localiser.py --config configs/localiser.yaml --checkpoint artifacts_sites/localiser_runs/cv_fold$k/best.pt --site-checkpoint artifacts_sites/runs/cv_fold$k/best.pt; done
 ```
+
+Trained fewer than five? Put the folds you have in place of `0 1 2 3 4`. The
+evaluation is minutes per fold and needs the site cache from 4b.
 
 The evaluation pairs each localiser with the site model **of the same fold**, so
 both have never seen the test patients. Read three things: the median 3D
@@ -602,54 +748,114 @@ numbers had never come from the CSV.
 
 ## 6. What to send back
 
-```
-artifacts_sites/runs/cv_fold*/metrics.json
-artifacts_sites/runs/cv_fold*/history.csv
-artifacts_sites/cv_pooled_metrics.json
-artifacts_sites/cv_predictions.csv
-artifacts_sites/results_*.csv
-artifacts_sites/results_geometric_baseline_fold*.json
-artifacts_sites/calibration/calibration.json
-artifacts_sites/xai_*.csv
-artifacts_sites/figures/
-```
-
-Send `results_faithfulness.csv` from **both** faithfulness runs, renamed so the
-settings are visible -- the default and the `--baseline mean --score deviation`
-diagnosis. The settings are in every row, but a filename that says so saves the
-person reading them from having to check.
-
-**Check that `patient_id` holds a patient before sending.** It should read
-`ToothFairy3F_011`, never `ToothFairy3F_011#45` -- the site id belongs in
-`case_id`, which is now written beside it. Files produced before v3.3.0 have the
-case id in both columns, which silently turned the patient-clustered bootstrap
-into a row bootstrap and cost a published claim. `REPORT.md` C8j has the story.
+One command, on the machine that ran it, when the run list is done:
 
 ```bash
-head -2 artifacts_sites/results_randomization.csv
+python scripts/pack_handback.py
 ```
 
-A few hundred MB in total. **Leave `cache/` behind** — it is many gigabytes and
-reproducible from the files above.
+It does three things, in this order.
 
-**Bring back the checkpoints the app runs on**, each with its companions -- the
-app reads them by name from the same folder:
+**It loads every checkpoint the way the app will.** Site models go through the
+app's own loader and localisers through theirs, both refusing to unpickle
+anything but plain data -- which is how the app opens a file picked in a
+browser. A checkpoint the app would refuse is reported here as a `PROBLEM`,
+while fixing it costs a command and not another rental.
+
+**It lists what the run list should have produced and did not**, as `MISSING`,
+each with what its absence costs. A partial run is a legitimate thing to send;
+an unexplained gap is not.
+
+**It writes the archive**, cache excluded, with a checksum for every file
+inside it:
 
 ```
-artifacts_sites/runs/cv_fold*/best.pt                 ~70 MB each
-artifacts_sites/runs/cv_fold*/best_val_metrics.json   decision threshold, validation MAE
-artifacts_sites/runs/cv_fold*/calibration.json        temperature and gate (run_adaptive.py)
-artifacts_sites/cv_folds.json                         which patients each fold trained on
-artifacts_sites/localiser_runs/cv_fold*/best.pt       and eval_*.json beside each
+handback/capstone_handback_v<version>.tar.gz
+handback/capstone_handback_v<version>.tar.gz.sha256
 ```
 
-`calibration.json` is written beside a checkpoint only for the fold
-`run_adaptive.py` was run on. A checkpoint without one still works in the app,
-and says on every result that it is uncalibrated and gated by a default.
+**Send both, by `scp` or `rsync`, never through a browser upload** -- see 4b
+for what a browser did to three transfers. A few hundred megabytes: five
+checkpoints at about 70 MB each are most of it.
 
-Back on your own machine the app is one click -- `start.bat` on Windows,
-`python -m app --open` anywhere -- and those files are picked in its **Models**
-dialog. `README.md`, "The app", has the rest.
+Nothing is packed while a `PROBLEM` stands. Read the line: it names the file
+and the reason. `--allow-problems` packs anyway and records them, for when the
+choice is a flawed archive or none. `--check-only` reports and writes nothing,
+and is worth running after 4c, before the long steps, as well as at the end.
+
+### What the app reads from each file
+
+The app is given files by a person picking them in a dialog, and it recognises
+them **by name**. Send them under the names the scripts wrote; a renamed
+companion is not found.
+
+| File, beside `cv_fold<k>/best.pt` | Written by | What the app does with it | Without it |
+|---|---|---|---|
+| `best.pt` | `train.py` | The weights, the millimetre standardiser (`target_spec`), the output names and the architecture (`model_config`) | Nothing to load |
+| `best_val_metrics.json` | `train.py`, with the checkpoint | The decision threshold for `needs_implant`, and the validation MAE that decides when a site is "borderline" | No threshold, and no borderline band |
+| `calibration.json` | `run_adaptive.py` | The temperature for the probability shown, and the confidence gate that routes an explanation | Every result says it is uncalibrated and gated by a default |
+| `artifacts_sites/cv_folds.json` | `train.py`, first fold | Whether an uploaded scan was in that model's training data | Every result says the patient's role is unknown |
+| `localiser_runs/cv_fold<k>/best.pt` | `train_localiser.py` | Finds the sites on a scan with no mask. Carries its own validation error and orientation accuracy | A scan can be analysed only with its mask |
+
+Three things about those files that are easy to get wrong:
+
+- **Do not edit, re-save or convert a checkpoint.** `torch.save` of anything
+  but the dictionary the training script wrote -- a whole model object, or a
+  dictionary with a NumPy number in it -- loads on the machine that made it and
+  is refused by the app. The pack command catches this; it cannot repair it.
+- **Send `best.pt`, not `last.pt`.** `best.pt` is the epoch selected on
+  validation and the one every companion describes.
+- **Pair by fold.** The localiser for fold k and the site model for fold k have
+  both never seen fold k's test patients. Any other pairing has.
+
+The app turns a scan over on a localiser's word only if that checkpoint's
+orientation accuracy on its validation patients is at least 95%; the pack
+command prints the figure for each localiser and says when it is under.
+
+### What the paper needs, beyond the checkpoints
+
+All of it is in the archive when it exists. Listed so a gap can be traced to a
+step:
+
+```
+artifacts_sites/sites_toothfairy3.csv                    4a   the labels the run trained on
+artifacts_sites/cv_folds.json                            4c   the partition
+artifacts_sites/runs/cv_fold*/metrics.json, history.csv  4c
+artifacts_sites/cv_pooled_metrics.json                   4c   pool_cv.py -- must hold a "feasibility" block
+artifacts_sites/cv_predictions.csv                       4c
+artifacts_sites/xai_*.csv                                4d   run_xai.py
+artifacts_sites/results_faithfulness*.csv                4d   one per run; see the renaming note in 4d
+artifacts_sites/results_randomization*.csv               4d
+artifacts_sites/results_agreement*.csv                   4d
+artifacts_sites/results_localization*.csv                4d
+artifacts_sites/results_ablations*.csv, results_pareto*  4d   run_adaptive.py
+artifacts_sites/calibration/, figures/                   4d
+artifacts_sites/results_geometric_baseline_fold*.json    4e
+artifacts_sites/localiser_runs/cv_fold*/eval_test.json   4f   and end_to_end_test.csv beside it
+```
+
+**`patient_id` must hold a patient.** It should read `ToothFairy3F_011`, never
+`ToothFairy3F_011#45` -- the site id belongs in `case_id`. Files written before
+v3.3.0 have the case id in both, which turned a patient-clustered bootstrap
+into a row bootstrap and cost a published claim (`REPORT.md` C8j). The pack
+command reports such a file as a `PROBLEM`.
+
+**Leave `cache/` and `localiser_cache/` behind.** Gigabytes, and rebuilt from
+the dataset by 4b and 4f.
+
+### On the machine that receives it
+
+```bash
+python scripts/pack_handback.py --verify path/to/capstone_handback_v<version>.tar.gz
+```
+
+It unpacks beside the archive, recomputes every checksum, loads every
+checkpoint again **with that machine's own PyTorch** -- the two machines will
+not have the same build, and this is the test of whether that matters -- and
+prints which files to pick in the app's **Models** dialog for each fold.
+
+The app itself is one click: `start.bat` on Windows, `python -m app --open`
+anywhere. `README.md`, "The app", has the rest.
 
 ---
 
@@ -666,6 +872,10 @@ dialog. `README.md`, "The app", has the rest.
 - **Do not set `target_spacing`.** `null` means native 0.3 mm, which is the whole
   reason for running this on rented hardware.
 - **Do not quote anything produced under `configs/sites_smoke.yaml`.**
+- **Do not send files without packing them.** The August run's results exist
+  today only as a report, because the files were never moved and nothing said
+  which ones mattered. `scripts/pack_handback.py` is one command.
+- **Do not `torch.save` a checkpoint yourself.** See section 6.
 - **`artifacts/` is a different, superseded task.** Read its `SUPERSEDED.md`. Its
   pooled AUROC of 0.835 answers *"is an implant already present?"*, which is not
   this project's question. Never mix the two directories.
