@@ -121,6 +121,8 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .fine.center { text-align: center; }
 .error { margin: 0; font-size: 12.5px; color: var(--danger); white-space: pre-wrap; }
 .error:empty { display: none; }
+.page-error { padding: 8px 24px; background: var(--bg-2); border-bottom: 1px solid var(--rule); cursor: pointer; }
+input[aria-invalid="true"] { border-color: var(--danger); }
 .dim { color: var(--ink-3); font-weight: 400; }
 
 /* ---- rail -------------------------------------------------------------- */
@@ -154,12 +156,13 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .role::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
 .role.test::before, .role.not_in_cohort::before { background: var(--st-feasible); }
 .role.train::before { background: var(--st-borderline); }
-.actions { display: flex; gap: 20px; align-items: center; padding-top: 4px; }
+.actions { display: flex; gap: 6px 20px; align-items: center; flex-wrap: wrap; padding-top: 4px; }
 
 .warnings { list-style: none; margin: 14px 0 0; padding: 0; }
 .warnings li { font-size: 12.5px; color: var(--ink-2); padding: 3px 0 3px 16px; position: relative; }
 .warnings li::before { content: "!"; position: absolute; left: 0; color: var(--st-borderline); font-weight: 600; }
 
+.pending { margin-top: 16px; max-width: 520px; }
 .progress { margin: 16px 0 0; max-width: 520px; }
 .track { height: 2px; background: var(--rule); }
 .track span { display: block; height: 100%; width: 0; background: var(--ink); transition: width .3s ease; }
@@ -269,6 +272,6 @@ dialog::backdrop { background: rgba(8, 10, 12, .5); }
   .main { padding: 20px 16px 40px; }
   .top { padding: 0 16px; }
   .product-sub { display: none; }
-  .disclaimer { padding: 8px 16px; }
+  .disclaimer, .page-error { padding: 8px 16px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

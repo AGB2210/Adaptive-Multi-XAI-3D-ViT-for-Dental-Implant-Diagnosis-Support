@@ -162,8 +162,8 @@ class TestItLearns:
             opt.zero_grad()
             loss["total"].backward()
             opt.step()
-            first = first if first is not None else float(loss["coord_mm"])
-        assert float(loss["coord_mm"]) < first / 3, (first, float(loss["coord_mm"]))
+            first = first if first is not None else loss["coord_mm"].item()
+        assert loss["coord_mm"].item() < first / 3, (first, loss["coord_mm"].item())
 
 
 class TestLoading:

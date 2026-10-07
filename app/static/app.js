@@ -26,8 +26,27 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+const OFFLINE = "The server is not answering. If its window was closed, start it again (start.bat) and reload this page.";
+
+function pageError(message) {
+  $("page-error").textContent = message || "";
+  $("page-error").hidden = !message;
+}
+$("page-error").addEventListener("click", () => pageError(""));
+// Anything an action did not handle itself still reaches the person.
+window.addEventListener("unhandledrejection", (ev) => {
+  pageError(ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason));
+});
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (_) {
+    S.offline = true;
+    throw new Error(OFFLINE);
+  }
+  if (S.offline) { S.offline = false; pageError(""); }
   if (!res.ok) {
     let msg = res.statusText;
     try { const body = await res.json(); msg = body.detail || msg; } catch (_) { /* not JSON */ }
@@ -121,6 +140,7 @@ const S = {
   view: { flipX: false, anteriorLowY: true, known: false },
   window: "full",
   token: 0,            // guards against stale async renders
+  offline: false,      // the last request did not reach the server
 };
 
 // ---------------------------------------------------------------- orientation
@@ -254,15 +274,26 @@ function renderModelList() {
 }
 
 async function activateModel(id) {
-  await api(`/api/models/${id}/activate`, { method: "POST" });
-  await refreshModels();
-  if (S.body) renderScan();
+  $("model-error").textContent = "";
+  try {
+    await api(`/api/models/${id}/activate`, { method: "POST" });
+    await refreshModels();
+    if (S.body) renderScan();
+  } catch (err) {
+    $("model-error").textContent = err.message;
+  }
 }
 
 async function removeModel(m) {
   if (!confirm(`Remove ${m.name}? Scans it analysed keep their results but cannot be explained again.`)) return;
-  await api(`/api/models/${m.id}`, { method: "DELETE" });
-  await refreshModels();
+  $("model-error").textContent = "";
+  try {
+    await api(`/api/models/${m.id}`, { method: "DELETE" });
+    await refreshModels();
+    if (S.body) renderScan();
+  } catch (err) {
+    $("model-error").textContent = err.message;
+  }
 }
 
 $("open-models").addEventListener("click", () => { $("model-error").textContent = ""; $("models-dialog").showModal(); });
@@ -352,15 +383,46 @@ async function openScan(id, job = null) {
   S.scanId = id;
   $("empty-state").hidden = true;
   $("scan-view").hidden = false;
-  await refreshScans();
-  await loadScan(token);
+  try {
+    await refreshScans();
+    await loadScan(token);
+  } catch (err) {
+    // The scan did not load. Leaving the page as it was would keep the previous
+    // scan's result on screen while every action went to this one.
+    if (token === S.token) closeScan();
+    throw err;
+  }
+  if (token !== S.token || !S.body) return;
   const running = job ? [job] : (S.body.jobs || []);
   for (const j of running) {
-    const ok = await trackJob(j, "scan-progress");
+    await trackJob(j, "scan-progress");
     if (token !== S.token) return;
-    if (ok) { await loadScan(token); await refreshScans(); }
+    // Reloaded after a failure too: the scan then says why, and offers a retry.
+    await loadScan(token);
+    await refreshScans();
   }
 }
+
+function closeScan() {
+  S.token++;
+  S.scanId = null; S.body = null; S.tooth = null; S.patch = null; S.overview = null;
+  S.explanation = null; S.maps = {}; S.overlay = "";
+  $("scan-view").hidden = true;
+  $("empty-state").hidden = false;
+}
+
+$("remove-scan").addEventListener("click", async () => {
+  if (!S.scanId || !S.body) return;
+  if (!confirm(`Remove ${S.body.meta.patient_id}? Its uploaded files and every result for it are deleted.`)) return;
+  await api(`/api/scans/${S.scanId}`, { method: "DELETE" });
+  closeScan();
+  await refreshScans();
+});
+
+$("reanalyse").addEventListener("click", async () => {
+  const res = await postJSON(`/api/scans/${S.scanId}/analyse`);
+  await openScan(S.scanId, res.job);
+});
 
 async function loadScan(token) {
   const body = await getJSON(`/api/scans/${S.scanId}`);
@@ -368,14 +430,21 @@ async function loadScan(token) {
   S.body = body;
   if (body.result && body.result.model) await rescore(token);   // at the rules on screen
   renderScan();
+  if (body.failed) showProgress("scan-progress", { ...body.failed, progress: 1 });
   if (body.result && body.result.overview) {
     S.overview = await getArray(`/api/scans/${S.scanId}/overview`).catch(() => null);
     if (token === S.token) drawOverview();
   } else {
     S.overview = null;
   }
-  if (S.tooth !== null) selectTooth(S.tooth, true);
-  else renderSiteCard(null);
+  if (S.tooth !== null) {
+    selectTooth(S.tooth, true);
+  } else {
+    renderSiteCard(null);
+    // No tooth of THIS scan is selected. Left visible, the viewer would go on
+    // showing the previous scan's patch and overlay under this scan's name.
+    $("viewer-card").hidden = true;
+  }
 }
 
 async function rescore(token = S.token) {
@@ -405,6 +474,12 @@ function renderScan() {
   role.textContent = pr ? pr.detail.charAt(0).toUpperCase() + pr.detail.slice(1) : "";
 
   const activeSite = S.models.find((m) => m.kind === "site" && m.active);
+  const busy = (S.body.jobs || []).length > 0;
+  // A scan with no predictions and nothing running: its analysis failed or the
+  // server stopped under it. The file is already here, so it can be run again.
+  $("reanalyse").hidden = busy || !!(result && result.model);
+  $("scan-pending").hidden = $("reanalyse").hidden;
+  $("scan-columns").hidden = !(result && result.sites);
   $("repredict").hidden = !(result && result.model && activeSite && activeSite.id !== result.model.id);
   $("download-csv").hidden = !(result && result.model);
   updateCsvLink();
@@ -767,7 +842,7 @@ $("save-png").addEventListener("click", () => {
   ctx.font = "15px 'IBM Plex Sans', sans-serif";
   ctx.fillText(`P(needs implant) ${fmt(o.needs_implant, 2)}   height ${fmt(o.available_height_mm)} mm   width ${fmt(o.ridge_width_mm)} mm   rules ${S.rules.min_height_mandible_mm} / ${S.rules.min_width_mm} mm`, pad, 62);
   ctx.fillStyle = "#8c949b";
-  ctx.fillText(`${S.overlay ? `${S.overlay} attribution for ${S.explanation.target}` : "no overlay"}   ·   model ${S.body.result.model.name}   ·   screening aid, not a diagnosis`, pad, 84);
+  ctx.fillText(`${S.overlay ? `${methodName(S.overlay)} attribution for ${OUTPUT_LABEL[S.explanation.target] || S.explanation.target}` : "no overlay"}   ·   model ${S.body.result.model.name}   ·   screening aid, not a diagnosis`, pad, 84);
   let x = pad;
   for (const c of canvases) { ctx.drawImage(c, x, header); x += c.width + pad; }
   const a = el("a", { href: out.toDataURL("image/png"), download: `${S.body.meta.patient_id}_tooth${site.tooth}.png` });
@@ -810,8 +885,16 @@ $("explain-run").addEventListener("click", async () => {
   }
 });
 
-const methodName = (m) => (m === "fused" ? "Fused (agreement-weighted)"
-  : m.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase()));
+const METHOD_LABEL = {
+  attention_rollout: "Attention rollout",
+  gradcam: "Grad-CAM",
+  integrated_gradients: "Integrated Gradients",
+  gradient_shap: "GradientSHAP",
+  fused: "Fused (agreement-weighted)",
+  fusion: "Fusion",
+};
+const methodName = (m) => METHOD_LABEL[m] || m.replaceAll("_", " ");
+const metricName = (m) => m.replace("_auc", " AUC").replaceAll("_", " ");
 
 function renderExplanation() {
   const e = S.explanation;
@@ -846,11 +929,11 @@ function renderExplanation() {
   const rows = [];
   const add = (k, v, warn = false) => rows.push(el("div", {}, el("dt", {}, k), el("dd", { class: warn ? "warn" : "" }, v)));
   if (e.fusion) {
-    add(`Fused ${e.fusion.eval_metric.replace("_", " ")}`, fmt(e.fusion.fused_eval, 4));
-    add(`Uniform ${e.fusion.eval_metric.replace("_", " ")}`, fmt(e.fusion.uniform_eval, 4));
+    add(`Fused ${metricName(e.fusion.eval_metric)}`, fmt(e.fusion.fused_eval, 4));
+    add(`Uniform ${metricName(e.fusion.eval_metric)}`, fmt(e.fusion.uniform_eval, 4));
     add("Beats best single method", e.fusion.beats_best_individual ? "yes" : "no");
     add("Beats uniform average", e.fusion.beats_uniform ? "yes" : "no");
-    add("Weighted by", e.fusion.weight_metric.replace("_", " "));
+    add("Weighted by", metricName(e.fusion.weight_metric));
   }
   if (e.ig_completeness) {
     const ce = e.ig_completeness.relative_error;
@@ -867,7 +950,13 @@ let ruleTimer = null;
 function onRuleChange() {
   const h = Number($("rule-height").value);
   const w = Number($("rule-width").value);
-  if (!(h > 0 && h < 100 && w > 0 && w < 100)) return;
+  const plausible = (v) => v > 0 && v < 100;
+  $("rule-height").setAttribute("aria-invalid", String(!plausible(h)));
+  $("rule-width").setAttribute("aria-invalid", String(!plausible(w)));
+  // A value that is not applied must not sit in the box looking as if it were.
+  $("rule-error").textContent = plausible(h) && plausible(w) ? ""
+    : `Enter a length between 0 and 100 mm. Still scored at ${S.rules.min_height_mandible_mm} / ${S.rules.min_width_mm} mm.`;
+  if (!(plausible(h) && plausible(w))) return;
   S.rules = { ...S.rules, min_height_mandible_mm: h, min_width_mm: w };
   clearTimeout(ruleTimer);
   ruleTimer = setTimeout(async () => {

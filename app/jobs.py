@@ -65,6 +65,7 @@ class JobQueue:
         with self._lock:
             self._jobs[job.id] = job
             subject_lock = self._subject_locks[subject]
+            self._futures = [f for f in self._futures if not f.done()]
             self._futures.append(self._pool.submit(self._run, job, fn, subject_lock))
         return job
 
@@ -76,6 +77,25 @@ class JobQueue:
         with self._lock:
             return [j for j in self._jobs.values()
                     if j.subject == subject and j.status in ("queued", "running")]
+
+    def last_finished_for(self, subject: str, kinds: tuple[str, ...]) -> Job | None:
+        """The most recent job of these kinds on `subject` that has ended, done or failed."""
+        with self._lock:
+            ended = [j for j in self._jobs.values()
+                     if j.subject == subject and j.kind in kinds and j.finished is not None]
+        return max(ended, key=lambda j: j.finished, default=None)
+
+    def shutdown(self) -> int:
+        """Take no more work and drop what has not started.
+
+        Returns how many jobs are still running. A thread cannot be stopped from
+        outside, so the caller decides what to do about those; every file a job
+        writes goes through a temporary name and a rename, so ending the process
+        under one leaves no half-written result behind.
+        """
+        self._pool.shutdown(wait=False, cancel_futures=True)
+        with self._lock:
+            return sum(j.status == "running" for j in self._jobs.values())
 
     def _run(self, job: Job, fn, subject_lock: threading.Lock) -> None:
         def progress(message: str, fraction: float) -> None:
@@ -97,5 +117,8 @@ class JobQueue:
     def join(self) -> None:
         """Block until every submitted job has finished. For tests."""
         with self._lock:
-            pending = list(self._futures)
+            # A job dropped by `shutdown` never runs, and `wait` would sit on it
+            # for ever: a cancelled future only counts as done once a worker has
+            # picked it up, which is the one thing that will not happen to it.
+            pending = [f for f in self._futures if not f.cancelled()]
         wait_all(pending)

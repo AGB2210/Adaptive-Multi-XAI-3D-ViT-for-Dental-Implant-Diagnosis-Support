@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import time
 import uuid
@@ -41,6 +42,21 @@ def clean(obj):
     return obj
 
 
+# An id or a key from a URL becomes a directory name. Anything that is not a
+# plain name -- a separator, a dot, a drive letter -- would resolve OUTSIDE the
+# store: on Windows a backslash is a path separator inside one URL segment, and
+# `DELETE /api/scans/..%5Cmodels%5C<id>` removed a model's folder through the
+# scan route. Refusing the name is cheaper than reasoning about each join.
+SAFE_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def safe_name(value: str) -> str:
+    """`value` if it is a plain file-system name, else KeyError (a 404)."""
+    if not isinstance(value, str) or not SAFE_NAME.fullmatch(value):
+        raise KeyError(value)
+    return value
+
+
 def nifti_suffix(filename: str) -> str:
     name = filename.lower()
     if name.endswith(".nii.gz"):
@@ -57,7 +73,7 @@ class ScanStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def dir(self, scan_id: str) -> Path:
-        path = self.root / scan_id
+        path = self.root / safe_name(scan_id)
         if not (path / "meta.json").is_file():
             raise KeyError(scan_id)
         return path
@@ -102,7 +118,7 @@ class ScanStore:
 
     # ---- files ----------------------------------------------------------
     def save_json(self, scan_id: str, name: str, data: dict) -> None:
-        path = self.root / scan_id / name
+        path = self.root / safe_name(scan_id) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(clean(data), indent=1), encoding="utf-8")
@@ -121,7 +137,7 @@ class ScanStore:
             return None
 
     def save_array(self, scan_id: str, name: str, array: np.ndarray) -> None:
-        path = self.root / scan_id / name
+        path = self.root / safe_name(scan_id) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.stem + ".tmp.npy")
         np.save(tmp, np.ascontiguousarray(array))
@@ -134,4 +150,4 @@ class ScanStore:
         return np.load(path, mmap_mode="r" if mmap else None)
 
     def explain_dir(self, scan_id: str, key: str) -> Path:
-        return self.dir(scan_id) / "explain" / key
+        return self.dir(scan_id) / "explain" / safe_name(key)

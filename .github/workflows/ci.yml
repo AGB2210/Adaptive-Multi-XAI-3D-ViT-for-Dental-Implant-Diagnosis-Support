@@ -1,4 +1,4 @@
-# Runs on every push and pull request. Four gates, cheapest first, so a typo
+# Runs on every push and pull request. Seven gates, cheapest first, so a typo
 # fails in seconds rather than after the test suite.
 #
 # Action versions are held at the current major. GitHub is retiring the Node 20

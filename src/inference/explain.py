@@ -33,6 +33,10 @@ from src.xai.calibration import uncertainty
 
 CHEAP = "attention_rollout"
 
+# What a progress line calls each method.
+LABELS = {"attention_rollout": "Attention rollout", "gradcam": "Grad-CAM",
+          "integrated_gradients": "Integrated Gradients", "gradient_shap": "GradientSHAP"}
+
 
 def gate_for(bundle: ModelBundle, default_threshold: float) -> tuple[ConfidenceGate, str]:
     if bundle.gate:
@@ -87,7 +91,7 @@ def explain_patch(
               "routing": routing, "maps": {}, "timings_s": {}, "notes": []}
 
     if not escalate:
-        step("attention rollout", 0.3)
+        step(LABELS.get(gate.cheap_method, gate.cheap_method), 0.3)
         t0 = time.perf_counter()
         method = build_method(gate.cheap_method, bundle.model, bundle.device)
         result["maps"][gate.cheap_method] = method.attribute(volume, target).cpu()
@@ -97,17 +101,16 @@ def explain_patch(
                                    "map whichever output is selected")
         return result
 
-    xai = settings
     methods = build_ensemble(
         bundle.model, bundle.device, names=ENSEMBLE_METHODS,
-        integrated_gradients={"steps": int(xai.get("ig_steps", 256)),
-                              "batch_size": int(xai.get("ig_batch", 4))},
-        gradient_shap={"n_samples": int(xai.get("shap_samples", 200)),
-                       "batch_size": int(xai.get("shap_batch", 4))},
+        integrated_gradients={"steps": int(settings.get("ig_steps", 256)),
+                              "batch_size": int(settings.get("ig_batch", 4))},
+        gradient_shap={"n_samples": int(settings.get("shap_samples", 200)),
+                       "batch_size": int(settings.get("shap_batch", 4))},
     )
     maps = {}
     for i, (name, method) in enumerate(methods.items()):
-        step(name.replace("_", " "), 0.05 + 0.6 * i / len(methods))
+        step(LABELS.get(name, name), 0.05 + 0.6 * i / len(methods))
         t0 = time.perf_counter()
         maps[name] = method.attribute(volume, target)
         result["timings_s"][name] = time.perf_counter() - t0
@@ -119,13 +122,13 @@ def explain_patch(
     if shap is not None and np.isfinite(shap.last_variance):
         result["shap_relative_se"] = float(shap.last_variance)
 
-    step("agreement-weighted fusion", 0.7)
+    step("Agreement-weighted fusion", 0.7)
     is_prob = target < n_bin
     score = "response" if is_prob else "deviation"
     t0 = time.perf_counter()
     fused = fuse(bundle.model, volume, maps, target,
                  weight_metric=WEIGHT_METRIC, eval_metric=EVAL_METRIC,
-                 steps=int(xai.get("fusion_steps", 50)),
+                 steps=int(settings.get("fusion_steps", 50)),
                  baseline=make_baseline(volume, "blur"),
                  target_is_probability=is_prob, score=score)
     result["timings_s"]["fusion"] = time.perf_counter() - t0
@@ -149,5 +152,5 @@ def explain_patch(
     if not is_prob:
         result["notes"].append("deletion/insertion on a millimetre head is read as deviation "
                                "from the full-input prediction (score='deviation')")
-    step("done", 1.0)
+    step("Done", 1.0)
     return result

@@ -87,9 +87,16 @@ def analysed(client, files):
 class TestModels:
     def test_status_reports_the_configured_rules(self, client):
         body = client.get("/api/status").json()
+        assert body["app"] == "implant-site-screening", "the launcher recognises the app by this"
         assert body["rules"]["min_height_mandible_mm"] == 12.0
         assert body["rules"]["min_width_mm"] == 6.0
         assert body["device"] == "cpu"
+
+    def test_the_page_is_checked_for_changes_before_it_is_reused(self, client):
+        """After an update the browser must not pair the new HTML with a cached script."""
+        for path in ("/", "/static/app.js", "/static/app.css"):
+            res = client.get(path)
+            assert res.status_code == 200 and res.headers["cache-control"] == "no-cache", path
 
     def test_a_model_and_its_companions_are_kept_and_activated(self, client, files):
         res = add_model(client, files["ckpt"], files["cal"], files["metrics"])
@@ -118,6 +125,12 @@ class TestModels:
     def test_a_scan_needs_a_model_first(self, client, files):
         res = upload(client, files["image"], files["mask"])
         assert res.status_code == 400 and "model" in res.json()["detail"]
+
+    def test_a_fold_that_is_not_a_number_is_refused_with_a_reason(self, client, files):
+        """It used to reach int() outside the error handling and return a bare 500."""
+        res = add_model(client, files["ckpt"], fold="first")
+        assert res.status_code == 400 and "fold" in res.json()["detail"]
+        assert client.get("/api/models").json() == []
 
 
 class TestAnalysis:
@@ -205,7 +218,8 @@ class TestAnalysis:
         for s in result["sites"]:
             assert s["source"] == "localiser" and s["truth"] is None
             assert s["verdict"]["status"]
-        assert any("localiser" in w for w in result["warnings"]),             "an image-only result must say its sites were not measured from a mask"
+        assert any("localiser" in w for w in result["warnings"]), \
+            "an image-only result must say its sites were not measured from a mask"
 
     def test_a_site_model_is_not_accepted_as_a_localiser(self, client, files):
         res = add_model(client, files["ckpt"], kind="localiser")
@@ -216,6 +230,34 @@ class TestAnalysis:
         other = tmp_path / "scan.png"
         other.write_bytes(b"not a scan")
         assert upload(client, other).status_code == 400
+
+    def test_a_failed_analysis_says_why_and_can_be_run_again(self, client, files, tmp_path):
+        """A scan whose analysis failed used to be stuck: no result, no reason
+        once the progress bar was gone, and no way forward but uploading again."""
+        assert add_model(client, files["ckpt"]).status_code == 201
+        scan_id = upload(client, files["image"]).json()["scan"]["id"]
+        client.app_state.jobs.join()
+        body = client.get(f"/api/scans/{scan_id}").json()
+        assert "result" not in body
+        assert body["failed"]["status"] == "failed" and "localiser" in body["failed"]["error"]
+
+        # What it was missing arrives; the same upload is analysed again.
+        loc = write_tiny_localiser(tmp_path / "localiser" / "localiser_best.pt")
+        assert add_model(client, loc, kind="localiser").status_code == 201
+        res = client.post(f"/api/scans/{scan_id}/analyse")
+        assert res.status_code == 202, res.text
+        client.app_state.jobs.join()
+        body = client.get(f"/api/scans/{scan_id}").json()
+        assert "failed" not in body
+        assert len(body["result"]["sites"]) == 14 and body["result"]["model"]
+
+    def test_a_removed_scan_is_gone(self, client, files):
+        scan_id = analysed(client, files)
+        folder = client.app_state.store.dir(scan_id)
+        assert client.delete(f"/api/scans/{scan_id}").status_code == 200
+        assert not folder.exists()
+        assert client.get(f"/api/scans/{scan_id}").status_code == 404
+        assert client.get("/api/scans").json() == []
 
 
 class TestExplanations:
@@ -253,13 +295,45 @@ class TestExplanations:
         assert r["threshold"] == -0.2 and "fitted on validation" in r["source"]
         assert r["decision"] == ("ensemble" if r["uncertainty"] >= -0.2 else "cheap")
 
-    def test_an_unknown_output_is_refused(self, client, files):
+    def test_an_unknown_output_is_refused_before_any_job_starts(self, client, files):
         scan_id = analysed(client, files)
         res = client.post(f"/api/scans/{scan_id}/sites/36/explain",
                           json={"target": "feasible", "force": True})
-        client.app_state.jobs.join()
-        job = client.get(f"/api/jobs/{res.json()['job']['id']}").json()
-        assert job["status"] == "failed" and "feasible" in job["error"]
+        assert res.status_code == 400 and "feasible" in res.json()["detail"]
+
+    def test_a_tooth_that_is_not_a_site_is_refused(self, client, files):
+        scan_id = analysed(client, files)
+        res = client.post(f"/api/scans/{scan_id}/sites/99/explain",
+                          json={"target": "needs_implant"})
+        assert res.status_code == 404
+
+
+class TestNamesFromTheUrl:
+    """An id or key in a URL becomes a directory name. On Windows a backslash is
+    a path separator inside ONE url segment, so `..\\models\\<id>` passed as a
+    scan id resolved to a model's folder -- and DELETE removed it."""
+
+    def test_a_scan_id_cannot_reach_a_models_folder(self, client, files):
+        model_id = add_model(client, files["ckpt"]).json()["id"]
+        folder = client.app_state.settings.models_dir / model_id
+        escaped = f"..%5Cmodels%5C{model_id}"
+        assert client.get(f"/api/scans/{escaped}").status_code == 404
+        assert client.delete(f"/api/scans/{escaped}").status_code == 404
+        assert (folder / "model.pt").is_file(), "the scan route removed a model"
+        assert [m["id"] for m in client.get("/api/models").json()] == [model_id]
+
+    def test_a_map_request_stays_inside_its_explanation(self, client, files):
+        """`explain/../volume` used to serve the prepared volume as if it were a map."""
+        scan_id = analysed(client, files)
+        assert client.get(f"/api/scans/{scan_id}/explain/%2E%2E/volume").status_code == 404
+        assert client.get(f"/api/scans/{scan_id}/explain/x/..%5C..%5Cvolume").status_code == 404
+
+    def test_a_model_id_is_a_plain_name(self, client, files):
+        scan_id = analysed(client, files)
+        escaped = f"..%5Cscans%5C{scan_id}"
+        assert client.delete(f"/api/models/{escaped}").status_code == 404
+        assert client.post(f"/api/models/{escaped}/activate").status_code == 404
+        assert client.get(f"/api/scans/{scan_id}").status_code == 200
 
 
 class TestJobsRunTogether:
@@ -298,6 +372,28 @@ class TestJobsRunTogether:
             queue.submit("write", "same-scan", work)
         queue.join()
         assert overlaps == [False] * 4
+
+    def test_shutdown_drops_what_has_not_started_and_counts_what_is_running(self):
+        """What the launcher asks on Ctrl+C: is anything still computing?"""
+        import threading
+
+        from app.jobs import JobQueue
+
+        queue, started, release = JobQueue(workers=1), threading.Event(), threading.Event()
+
+        def work(progress):
+            started.set()
+            release.wait(10)
+            return {}
+
+        first = queue.submit("explain", "a", work)
+        waiting = queue.submit("explain", "b", work)
+        assert started.wait(10)
+        assert queue.shutdown() == 1
+        release.set()
+        queue.join()
+        assert queue.get(first.id).status == "done"
+        assert queue.get(waiting.id).status == "queued", "a job that had not started must not run"
 
     def test_two_scans_are_analysed_side_by_side(self, client, files):
         assert add_model(client, files["ckpt"], files["metrics"]).status_code == 201

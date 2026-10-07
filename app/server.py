@@ -12,7 +12,7 @@ import csv
 import io
 import shutil
 import tempfile
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -25,11 +25,30 @@ from app import analysis
 from app.jobs import JobQueue
 from app.registry import ModelRegistry
 from app.settings import REPO_ROOT, Settings
-from app.store import ScanStore, clean
+from app.store import ScanStore, clean, safe_name
 from src.inference.checkpoint import CheckpointError
 from src.inference.predict import site_patch
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+# Reported by /api/status, so the launcher can tell this app from whatever else
+# might be answering on the port.
+APP_ID = "implant-site-screening"
+
+
+class RevalidatedFiles(StaticFiles):
+    """The page's files, which the browser must check before it reuses them.
+
+    Without this a browser keeps `app.js` on its own judgement of freshness, so
+    the page after an update can be the new HTML running the old script -- and
+    the first thing that script does is look up an element that is not there.
+    `no-cache` still allows a 304, so an unchanged file is not sent again.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def version() -> str:
@@ -80,11 +99,22 @@ def create_app(settings: Settings) -> FastAPI:
     tmp_root = settings.data_dir / "tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
+    # Uploads are written here and moved or deleted by the request that made
+    # them. Anything still present was left by a process that ended mid-upload.
+    for stale in tmp_root.iterdir():
+        if stale.is_file():
+            stale.unlink(missing_ok=True)
+
     registry = ModelRegistry(settings)
     store = ScanStore(settings.scans_dir)
     jobs = JobQueue()
 
-    app = FastAPI(title="Implant site screening", version=version())
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        jobs.shutdown()
+
+    app = FastAPI(title="Implant site screening", version=version(), lifespan=lifespan)
     app.state.settings, app.state.registry = settings, registry
     app.state.store, app.state.jobs = store, jobs
 
@@ -108,6 +138,7 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/status")
     def status():
         return json({
+            "app": APP_ID,
             "version": version(),
             "device": str(settings.device),
             "config": settings.config_path.name,
@@ -130,8 +161,11 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             for f in files:
                 saved.append((f.filename or "upload", save_upload(f)))
-            fold_value = int(fold) if fold not in (None, "") else None
             with errors():
+                try:
+                    fold_value = int(fold) if fold not in (None, "") else None
+                except ValueError:
+                    raise ValueError(f"fold must be a whole number, got {fold!r}") from None
                 meta = registry.add(saved, kind=kind, name=name or None, fold=fold_value)
         finally:
             for _, path in saved:
@@ -168,16 +202,40 @@ def create_app(settings: Settings) -> FastAPI:
             image_tmp.unlink(missing_ok=True)
             if mask_tmp:
                 mask_tmp.unlink(missing_ok=True)
-        job = jobs.submit("analyse", meta["id"], lambda progress: analysis.analyse(
-            settings, registry, store, meta["id"], progress))
-        return json({"scan": meta, "job": job.public()}, 202)
+        return json({"scan": meta, "job": start_analysis(meta["id"]).public()}, 202)
+
+    def start_analysis(scan_id: str):
+        return jobs.submit("analyse", scan_id, lambda progress: analysis.analyse(
+            settings, registry, store, scan_id, progress))
+
+    @app.post("/api/scans/{scan_id}/analyse")
+    def reanalyse(scan_id: str):
+        """Run the whole analysis again on a scan that is already uploaded.
+
+        An analysis that failed -- no localiser yet, a model removed under it --
+        or that was cut short when the server stopped leaves a scan with no
+        result. Without this the only way forward was to upload the file again.
+        """
+        with errors():
+            store.meta(scan_id)
+        if jobs.active_for(scan_id):
+            raise HTTPException(409, "this scan is still being processed")
+        if registry.active("site") is None:
+            raise HTTPException(400, "add a site model (.pt) before analysing a scan")
+        return json({"job": start_analysis(scan_id).public()}, 202)
 
     @app.get("/api/scans/{scan_id}")
     def get_scan(scan_id: str):
         with errors():
             meta = store.meta(scan_id)
             result = store.result(scan_id)
-        body = {"meta": meta, "jobs": [j.public() for j in jobs.active_for(scan_id)]}
+        active = jobs.active_for(scan_id)
+        body = {"meta": meta, "jobs": [j.public() for j in active]}
+        last = jobs.last_finished_for(scan_id, kinds=("analyse", "predict"))
+        if not active and last is not None and last.status == "failed":
+            # Why the scan looks the way it does, for a page opened after the
+            # job's own progress bar is gone.
+            body["failed"] = last.public()
         if result is not None and "model" in result:
             body["result"] = analysis.scored(result, settings.rules)
         elif result is not None:
@@ -241,7 +299,17 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/api/scans/{scan_id}/sites/{tooth}/explain")
     def start_explain(scan_id: str, tooth: int, body: ExplainRequest):
         with errors():
-            store.meta(scan_id)
+            result = store.result(scan_id)
+            if result is None or "model" not in result:
+                raise HTTPException(409, "this scan has no predictions to explain")
+            if find_site(result, tooth).get("prediction") is None:
+                raise HTTPException(409, f"site {tooth} has no position, so no prediction")
+            # Refused here, not inside the job: the target becomes part of a
+            # directory name, and a request for an output the model does not
+            # have should not show a progress bar first.
+            outputs = [o["name"] for o in result["model"]["description"]["outputs"]]
+            if body.target not in outputs:
+                raise ValueError(f"{body.target!r} is not one of this model's outputs {outputs}")
             key = analysis.explain_key(tooth, body.target, body.force)
             cached = store.explain_dir(scan_id, key) / "meta.json"
             if cached.is_file():
@@ -253,9 +321,8 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/scans/{scan_id}/explain/{key}/{method}")
     def get_map(scan_id: str, key: str, method: str):
         with errors():
-            folder = store.explain_dir(scan_id, key)
-            path = folder / f"{method}.npy"
-            if not path.is_file() or path.parent != folder:
+            path = store.explain_dir(scan_id, key) / f"{safe_name(method)}.npy"
+            if not path.is_file():
                 raise KeyError(method)
             array = np.load(path)
         return array_response(array)
@@ -304,7 +371,7 @@ def create_app(settings: Settings) -> FastAPI:
     # ---- page -----------------------------------------------------------
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    app.mount("/static", RevalidatedFiles(directory=STATIC), name="static")
     return app

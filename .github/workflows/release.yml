@@ -34,7 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements-app.txt
-          pip install ruff
+          # The same pin as CI: a release judged by a different linter than the
+          # one that judged its commits can fail on a tag CI passed.
+          pip install 'ruff==0.16.4'
 
       - name: Tag must agree with VERSION
         run: |

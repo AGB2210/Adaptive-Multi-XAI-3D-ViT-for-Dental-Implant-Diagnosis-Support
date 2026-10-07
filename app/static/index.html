@@ -25,6 +25,7 @@
     Screening aid. Flags tooth sites for clinical review; not a diagnosis or a treatment plan.
     Every measurement is shown with the model's validation error.
   </p>
+  <p class="error page-error" id="page-error" role="alert" title="Dismiss" hidden></p>
 
   <div class="layout">
     <aside class="rail">
@@ -57,6 +58,7 @@
             <input type="number" id="rule-width" min="2" max="15" step="0.5"><i>mm</i></label>
           <p class="fine">Applied to the predicted millimetres. Changing them re-scores every
             site immediately; the model does not run again.</p>
+          <p class="error" id="rule-error" role="alert"></p>
           <button class="link" id="rules-reset" type="button">Reset to configured values</button>
         </div>
       </section>
@@ -86,8 +88,10 @@
             <p class="role" id="patient-role"></p>
           </div>
           <div class="actions">
+            <button class="link" id="reanalyse" type="button" hidden>Analyse again</button>
             <button class="link" id="repredict" type="button">Re-run with active model</button>
             <a class="link" id="download-csv" href="#">Download CSV</a>
+            <button class="link danger" id="remove-scan" type="button">Remove scan</button>
           </div>
         </section>
 
@@ -96,8 +100,11 @@
           <p class="progress-text"></p>
         </div>
         <ul class="warnings" id="scan-warnings"></ul>
+        <p class="fine pending" id="scan-pending" hidden>This scan has no result. Its analysis
+          failed, or the server was stopped before it finished. The uploaded files are kept:
+          choose <b>Analyse again</b>.</p>
 
-        <div class="columns">
+        <div class="columns" id="scan-columns">
           <section class="jaw">
             <div class="section-head">
               <h2>Lower jaw</h2>

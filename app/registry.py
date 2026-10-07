@@ -23,8 +23,9 @@ import uuid
 from pathlib import Path
 
 from app.settings import Settings
+from app.store import safe_name
 from src.data.splits import fold_assignment, load_folds
-from src.inference.checkpoint import CheckpointError, load_bundle
+from src.inference.checkpoint import load_bundle
 from src.xai.runner import fold_from_checkpoint
 
 KINDS = ("site", "localiser")
@@ -74,7 +75,10 @@ class ModelRegistry:
         return self.root / model_id / "meta.json"
 
     def get(self, model_id: str) -> dict | None:
-        path = self._meta_path(model_id)
+        try:
+            path = self._meta_path(safe_name(model_id))
+        except KeyError:
+            return None                  # not a name a model could have
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
@@ -234,6 +238,3 @@ class ModelRegistry:
                 return {"role": role, "detail": detail}
         return {"role": "not_in_cohort",
                 "detail": "not in this model's fold partition: an unseen scan"}
-
-
-__all__ = ["ModelRegistry", "CheckpointError", "role_of", "ROLE_NAMES", "KINDS"]
