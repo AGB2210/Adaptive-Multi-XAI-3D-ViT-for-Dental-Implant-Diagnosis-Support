@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -94,6 +95,7 @@ class Finding:
 class Report:
     findings: list[Finding] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)      # everything to pack
+    refused: list[Path] = field(default_factory=list)    # checkpoints the app would not load
     site_models: list[dict] = field(default_factory=list)
     localisers: list[dict] = field(default_factory=list)
 
@@ -185,6 +187,8 @@ def check_site_model(report: Report, directory: Path, app_config: Path, device: 
             raise ValueError(f"a forward pass returned {tuple(out.shape)}, finite={bool(torch.isfinite(out).all())}")
     except Exception as exc:  # noqa: BLE001 - whatever stops the app from loading it is the finding
         report.add(PROBLEM, ckpt, f"the app would refuse this file: {exc}")
+        if pack:
+            report.refused.append(ckpt)
         return
     if not pack:
         report.add(OK, ckpt, f"the app accepts it ({bundle.names}, architecture "
@@ -221,6 +225,7 @@ def check_localiser(report: Report, directory: Path, device: torch.device, min_o
         localiser = load_localiser(ckpt, device, allow_unsafe=False)
     except Exception as exc:  # noqa: BLE001
         report.add(PROBLEM, ckpt, f"the app would refuse this file: {exc}")
+        report.refused.append(ckpt)
         return
     report.files.append(ckpt)
     present = _companions(report, directory, LOCALISER_COMPANIONS)
@@ -300,8 +305,15 @@ def inspect(artifacts: Path, runs: Path, localiser_runs: Path, app_config: Path,
     return report
 
 
-def write_archive(report: Report, base: Path, archive: Path, env: dict) -> dict:
-    """Pack every accepted file with a manifest of checksums. Returns the manifest."""
+def write_archive(report: Report, base: Path, archive: Path, env: dict,
+                  include_refused: bool = False) -> dict:
+    """Pack every accepted file with a manifest of checksums. Returns the manifest.
+
+    `include_refused` adds the checkpoints the app would not load. They are no
+    use to the app as they are, and they are the one thing needed to find out
+    why: a file that stays on a rented machine cannot be examined after the
+    rental ends.
+    """
     def inside(path) -> str:
         try:
             return Path(path).resolve().relative_to(base.resolve()).as_posix()
@@ -309,13 +321,15 @@ def write_archive(report: Report, base: Path, archive: Path, env: dict) -> dict:
             raise ValueError(f"{path} is not under {base}: the archive keeps the layout the app "
                              f"and the scripts expect, so every file has to sit below one folder") from None
 
+    files = list(dict.fromkeys([*report.files, *(report.refused if include_refused else [])]))
     entries = [{"path": inside(path), "bytes": path.stat().st_size, "sha256": sha256(path)}
-               for path in report.files]
+               for path in files]
     manifest = {
         "environment": env,
         "site_models": [{**m, "checkpoint": inside(m["checkpoint"])} for m in report.site_models],
         "localisers": [{**m, "checkpoint": inside(m["checkpoint"])} for m in report.localisers],
         "missing": [{"path": f.path, "cost": f.detail} for f in report.missing],
+        "problems": [{"path": f.path, "reason": f.detail} for f in report.problems],
         "files": entries,
     }
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -323,7 +337,7 @@ def write_archive(report: Report, base: Path, archive: Path, env: dict) -> dict:
     manifest_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     with tarfile.open(archive, "w:gz", compresslevel=1) as tar:
         tar.add(manifest_path, arcname=MANIFEST)
-        for path, entry in zip(report.files, entries):
+        for path, entry in zip(files, entries):
             tar.add(path, arcname=entry["path"])
     manifest_path.unlink()
     return manifest
@@ -331,9 +345,19 @@ def write_archive(report: Report, base: Path, archive: Path, env: dict) -> dict:
 
 def extract_and_verify(archive: Path, out_dir: Path) -> tuple[dict, list[str]]:
     """Unpack a hand-back and recompute every checksum. Returns (manifest, faults)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive, "r:*") as tar:
-        tar.extractall(out_dir, filter="data")
+    if out_dir.exists():
+        # Left by an earlier --verify of an archive of the same name. A file from
+        # that one would be loaded and reported as if it had just arrived.
+        if not (out_dir / MANIFEST).is_file() and any(out_dir.iterdir()):
+            return {}, [f"{out_dir} already exists and was not made by --verify; move it or the archive"]
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    try:
+        with tarfile.open(archive, "r:*") as tar:
+            tar.extractall(out_dir, filter="data")
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        return {}, [f"{archive.name} cannot be unpacked ({type(exc).__name__}: {exc}) -- "
+                    f"truncated in transfer, or not the file pack_handback.py wrote"]
     manifest_path = out_dir / MANIFEST
     if not manifest_path.is_file():
         return {}, [f"{archive.name} holds no {MANIFEST}: it was not written by pack_handback.py"]

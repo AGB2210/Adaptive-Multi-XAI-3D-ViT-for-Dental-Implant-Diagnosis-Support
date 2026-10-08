@@ -211,3 +211,93 @@ def test_the_script_reports_and_exits_zero_on_a_tree_with_nothing_wrong():
     assert out.returncode in (0, 1), out.stderr[-600:]
     assert "problem(s)" in out.stdout and MISSING in out.stdout or "ok (" in out.stdout
     assert (PROBLEM in out.stdout) == (out.returncode == 1)
+
+
+class TestWhatHappensWhenSomethingIsWrong:
+    def test_allow_problems_sends_the_refused_checkpoint_and_says_why(self, tmp_path):
+        """A checkpoint the app refuses is no use to the app and is the only way
+        to find out why. Left on a rented machine, it cannot be examined later."""
+        base = tmp_path / "box"
+        art, runs, loc = make_run(base)
+        write_tiny_checkpoint(runs / "cv_fold1" / "best.pt", best_macro_auroc=np.float64(0.95))
+        report = run_inspect(art, runs, loc)
+        plain = write_archive(report, base, tmp_path / "a" / "x.tar.gz", {})
+        assert "artifacts_sites/runs/cv_fold1/best.pt" not in {e["path"] for e in plain["files"]}
+        full = write_archive(report, base, tmp_path / "b" / "x.tar.gz", {}, include_refused=True)
+        assert "artifacts_sites/runs/cv_fold1/best.pt" in {e["path"] for e in full["files"]}
+        assert len(full["problems"]) == 1 and "refuse" in full["problems"][0]["reason"]
+
+    def test_a_truncated_archive_is_one_clear_line_not_a_traceback(self, tmp_path):
+        """Three uploads on this project arrived cut short at a power of two."""
+        base = tmp_path / "box"
+        archive = tmp_path / "out" / "x.tar.gz"
+        write_archive(run_inspect(*make_run(base)), base, archive, {})
+        cut = tmp_path / "cut.tar.gz"
+        cut.write_bytes(archive.read_bytes()[: archive.stat().st_size // 2])
+        manifest, faults = extract_and_verify(cut, tmp_path / "there")
+        assert manifest == {} or faults
+        assert faults and ("cannot be unpacked" in faults[0] or "not in the archive" in faults[0])
+
+    def test_verifying_twice_does_not_read_the_first_archives_files(self, tmp_path):
+        base = tmp_path / "box"
+        art, runs, loc = make_run(base)
+        archive = tmp_path / "out" / "x.tar.gz"
+        write_archive(run_inspect(art, runs, loc), base, archive, {})
+        there = tmp_path / "there"
+        extract_and_verify(archive, there)
+        stale = there / "artifacts_sites" / "runs" / "cv_fold9" / "best.pt"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"left over")
+        _, faults = extract_and_verify(archive, there)
+        assert not faults and not stale.exists()
+
+    def test_a_folder_verify_did_not_make_is_left_alone(self, tmp_path):
+        base = tmp_path / "box"
+        archive = tmp_path / "out" / "x.tar.gz"
+        write_archive(run_inspect(*make_run(base)), base, archive, {})
+        mine = tmp_path / "mine"
+        mine.mkdir()
+        (mine / "thesis.docx").write_text("do not delete")
+        _, faults = extract_and_verify(archive, mine)
+        assert faults and "was not made by --verify" in faults[0]
+        assert (mine / "thesis.docx").read_text() == "do not delete"
+
+
+def _script(*args):
+    return subprocess.run([sys.executable, str(ROOT / "scripts" / "pack_handback.py"), *args],
+                          capture_output=True, text=True, timeout=300)
+
+
+def test_verify_checks_the_archive_against_its_checksum_file_first(tmp_path):
+    """What will be run the day the weights arrive, on the two files that
+    arrive: a matching pair is unpacked and its models listed for the app; a
+    pair that does not match is refused before anything is unpacked."""
+    from src.inference.handback import sha256
+
+    base = tmp_path / "box"
+    archive = tmp_path / "in" / "capstone_handback_vX.tar.gz"
+    write_archive(run_inspect(*make_run(base)), base, archive, environment(ROOT))
+    sidecar = Path(str(archive) + ".sha256")
+    sidecar.write_text(f"{sha256(archive)}  {archive.name}\n", newline="\n")
+
+    good = _script("--verify", str(archive))
+    assert good.returncode == 0, good.stdout[-800:] + good.stderr[-800:]
+    assert "matches capstone_handback_vX.tar.gz.sha256" in good.stdout
+    assert "every checksum matches" in good.stdout
+    assert "Site model, cv_fold0  (kind: Site model, fold 0)" in good.stdout
+    assert "pick together: best.pt, best_val_metrics.json, calibration.json" in good.stdout
+    assert "Localiser, cv_fold0" in good.stdout
+    unpacked = tmp_path / "in" / "capstone_handback_vX" / "artifacts_sites"
+    assert (unpacked / "cv_folds.json").is_file()
+
+    # ...and the line it prints for the tables runs as printed, on what was unpacked.
+    line = next(row for row in good.stdout.splitlines() if "summarise_results.py" in row)
+    assert str(unpacked) in line
+    tables = subprocess.run([sys.executable, str(ROOT / "scripts" / "summarise_results.py"),
+                             "--artifacts", str(unpacked)], capture_output=True, text=True, cwd=ROOT)
+    assert tables.returncode == 0, tables.stderr[-800:]
+    assert (unpacked / "RESULTS_SUMMARY.md").is_file()
+
+    sidecar.write_text("0" * 64 + f"  {archive.name}\n", newline="\n")
+    bad = _script("--verify", str(archive))
+    assert bad.returncode == 1 and "changed in transfer" in bad.stdout

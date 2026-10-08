@@ -13,7 +13,8 @@ and writes
     handback/capstone_handback_v<version>.tar.gz.sha256
 
 Send both. Nothing is packed while a file is unusable; `--allow-problems` packs
-anyway and records the problems in the archive.
+anyway, records the problems in the archive, and includes the refused
+checkpoints so they can be examined.
 
 ON THE MACHINE THAT RECEIVES IT:
 
@@ -23,7 +24,8 @@ It unpacks beside the archive, recomputes every checksum -- three uploads on
 this project arrived truncated at exact powers of two, and one cache file
 matched in size and differed in content -- then loads every checkpoint again
 with THIS machine's torch, which is the test that matters, and prints which
-files to pick in the app.
+files to pick in the app and the command that recomputes every table from the
+rows that came back (`scripts/summarise_results.py`).
 """
 
 from __future__ import annotations
@@ -76,7 +78,8 @@ def app_instructions(manifest: dict, root: Path, folds_json: Path) -> None:
         folder = (root / model["checkpoint"]).parent
         picks = ["best.pt", *[c for c in model["companions"]
                               if c in ("best_val_metrics.json", "calibration.json")]]
-        print(f"\nSite model, {model['fold']}  (kind: Site model, fold {model['fold'][-1]})")
+        number = "".join(ch for ch in model["fold"] if ch.isdigit())
+        print(f"\nSite model, {model['fold']}  (kind: Site model, fold {number})")
         print(f"  folder: {folder}")
         print(f"  pick together: {', '.join(picks)}, and {folds_json}")
         if not model["calibrated"]:
@@ -86,6 +89,10 @@ def app_instructions(manifest: dict, root: Path, folds_json: Path) -> None:
         print(f"  pick: {root / loc['checkpoint']}")
     print("\nUse the site model and the localiser of the SAME fold: only then has neither seen "
           "that fold's test patients.")
+    print("\nA model is used only once the Models list marks it Active. The first one added of each "
+          "kind is; after that, 'Use' beside a model switches to it. If a model was already listed "
+          "before these -- a demonstration one, say -- it is still the active one until you switch, "
+          "and a scan uploaded meanwhile is judged by it. Every result names the model that made it.")
 
 
 def main() -> int:
@@ -118,7 +125,24 @@ def main() -> int:
 
     if args.verify:
         archive = Path(args.verify)
-        root = archive.with_name(archive.name.replace(".tar.gz", ""))
+        if not archive.is_file():
+            print(f"{archive} is not a file.")
+            return 1
+        # The archive's own checksum first: it is the cheapest check, and a
+        # truncated archive fails here with one clear line.
+        sidecar = Path(str(archive) + ".sha256")
+        if sidecar.is_file():
+            expected = sidecar.read_text(encoding="utf-8").split()[0].lower()
+            if sha256(archive) != expected:
+                print(f"{archive.name} does not match {sidecar.name}: it changed in transfer.\n"
+                      "Ask for it again, over scp or rsync and not a browser upload.")
+                return 1
+            print(f"{archive.name} matches {sidecar.name}.")
+        else:
+            print(f"no {sidecar.name} beside the archive, so the archive as a whole is not checked; "
+                  "each file inside it still is.")
+        stem = archive.name[:-len(".tar.gz")] if archive.name.endswith(".tar.gz") else archive.name + "_unpacked"
+        root = archive.with_name(stem)
         manifest, faults = extract_and_verify(archive, root)
         if faults:
             print(f"{len(faults)} file(s) did not survive the transfer:")
@@ -129,6 +153,8 @@ def main() -> int:
             return 1
         env = manifest.get("environment", {})
         print(f"{len(manifest['files'])} files, every checksum matches.")
+        for known in manifest.get("problems", []):
+            print(f"sent with a known problem: {known['path']}\n      {known['reason']}")
         print(f"produced by code {env.get('code_version')} ({env.get('git_describe')}), "
               f"python {env.get('python')}, torch {env.get('torch')}, {env.get('gpu')}")
         there = [root / d.relative_to(base) for d in (artifacts, runs, localiser_runs)]
@@ -140,6 +166,11 @@ def main() -> int:
                   f"lines above back with `pip list`.")
             return 1
         app_instructions(manifest, root, there[0] / "cv_folds.json")
+        print()
+        print("=" * 78)
+        print("THE TABLES, recomputed from the rows that came back -- quote from its output, not from a log")
+        print("=" * 78)
+        print(f'python scripts/summarise_results.py --artifacts "{there[0]}"')
         return 0
 
     report = inspect(artifacts, runs, localiser_runs, REPO / args.app_config, min_orientation)
@@ -158,7 +189,9 @@ def main() -> int:
 
     env = environment(REPO)
     archive = resolve(args.out) / f"capstone_handback_v{env['code_version']}.tar.gz"
-    manifest = write_archive(report, base, archive, env)
+    # With --allow-problems the refused checkpoints go too: they are the only
+    # way to find out, after the rental has ended, why the app would not load them.
+    manifest = write_archive(report, base, archive, env, include_refused=args.allow_problems)
     digest = sha256(archive)
     # LF whatever the platform: `sha256sum -c` on Linux reads a CRLF line as a
     # file name ending in a carriage return, and reports the archive missing.
