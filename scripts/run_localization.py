@@ -50,6 +50,7 @@ from src.xai import ENSEMBLE_METHODS, build_ensemble  # noqa: E402
 from src.xai.localization import competing_structure_ratio, localization_scores  # noqa: E402
 from src.xai.runner import (
     ci_table,
+    has_an_interval,
     load_case_set,
     load_model,
     require_prerequisites,
@@ -256,6 +257,12 @@ def main() -> None:
         raise SystemExit("no case produced a usable mask")
 
     df = pd.DataFrame(rows)
+    # The denominator, in the file. It was only ever printed below, so a figure
+    # quoted from this CSV could be traced to its rows and not to how many
+    # cases those rows were chosen from. The same three numbers on every row.
+    df["cases_selected"] = len(selected)
+    df["cases_without_structure"] = no_structure
+    df["cases_without_mask"] = mask_failed
     art = artifacts_dir(cfg)
     out = art / "results_localization.csv"
     df.to_csv(out, index=False)
@@ -290,6 +297,12 @@ def main() -> None:
         print(f"{column} with a 95% interval clustered by patient ({note}):")
         print(table.round(4).to_string())
         null = 1.0 if column == "enrichment" else 0.0
+        if not has_an_interval(table):
+            # The two checks below would print nothing for such a row -- which
+            # reads as "separated from chance, and a clear best method".
+            print("   at least one method has no usable interval -- one patient, or nothing "
+                  "defined -- so nothing is claimed about chance or about a best method")
+            continue
         indistinguishable = [m for m in table.index
                              if table.loc[m, "ci_lo"] <= null <= table.loc[m, "ci_hi"]]
         if indistinguishable:

@@ -9,6 +9,16 @@ block and are the sizes that make a claim.
 Emits artifacts/results_faithfulness.csv, artifacts/results_agreement.csv,
 artifacts/results_randomization.csv and the corresponding figures.
 
+ONE RUN WRITES ALL THREE, and a second run replaces all three. For a second run
+with other settings, give it a name and skip the cascade, which does not depend
+on the baseline or the score and is the slowest part:
+
+    python scripts/run_faithfulness.py ... --baseline mean --score deviation \
+        --tag mean_deviation --randomization-cases 0
+
+writes results_faithfulness_mean_deviation.csv and
+results_agreement_mean_deviation.csv, and touches nothing the first run wrote.
+
 Nothing here compares saliency to anatomical ground truth, by design: these
 metrics have to work on a cohort without masks. Mask-based localisation scoring
 is a separate, additional check. The bone-mass metric is a coarse
@@ -18,6 +28,7 @@ intensity-threshold proxy and is labelled as such wherever it appears.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -50,6 +61,7 @@ from src.xai.runner import (
     resolve_fold,
     select_cases,  # noqa: E402
     training_baselines,
+    unordered_pairs,
     xai_setting,
 )
 from src.xai.visualize import (  # noqa: E402
@@ -88,6 +100,28 @@ def direction_note(target: int, n_bin: int, score: str, label: str) -> str:
             f"them against an absolute.")
 
 
+def tag_suffix(tag: str) -> str:
+    """`_<tag>`, or nothing. Refused if it could not be part of a file name."""
+    if not tag:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", tag):
+        raise SystemExit(f"--tag {tag!r}: letters, digits, '-' and '_' only; it goes into file names")
+    return f"_{tag}"
+
+
+def output_files(art: Path, tag: str = "") -> tuple[Path, Path, Path]:
+    """The three files one run writes: deletion/insertion, agreement, randomisation.
+
+    Named in one place, so a tagged run cannot write two of them under its tag
+    and the third over an earlier run's. Every name still starts
+    `results_<kind>`, which is what `pack_handback.py` collects and
+    `summarise_results.py` reads.
+    """
+    suffix = tag_suffix(tag)
+    return tuple(art / f"results_{kind}{suffix}.csv"
+                 for kind in ("faithfulness", "agreement", "randomization"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -104,7 +138,8 @@ def main() -> None:
                     help="default comes from xai.faithfulness_cases in the config")
     ap.add_argument("--steps", type=int, default=100, help="deletion/insertion steps (~1%% each)")
     ap.add_argument("--randomization-cases", dest="rand_cases", type=int, default=None,
-                    help="default comes from xai.randomization_cases in the config")
+                    help="default comes from xai.randomization_cases in the config; "
+                         "0 skips the cascade and leaves any existing file alone")
     ap.add_argument("--only-randomization", dest="only_randomization", action="store_true",
                     help="skip the deletion/insertion sweep and redo only the sanity check, "
                          "reusing the existing results_faithfulness.csv")
@@ -120,7 +155,12 @@ def main() -> None:
                          "from the full-input prediction, which is the reading a "
                          "millimetre head needs -- see deletion_insertion")
     ap.add_argument("--methods", nargs="*", default=list(ENSEMBLE_METHODS))
+    ap.add_argument("--tag", default="",
+                    help="written into the names of this run's three output files and its "
+                         "figures: results_faithfulness_<tag>.csv and so on. A second run "
+                         "with other settings then replaces nothing the first one wrote")
     args = ap.parse_args()
+    suffix = tag_suffix(args.tag)
 
     cfg = load_config(args.config)
     dataset = args.dataset or primary_dataset(cfg)
@@ -171,6 +211,7 @@ def main() -> None:
         return build_method(name, m, device, **opts)
     art = artifacts_dir(cfg)
     figures = art / "figures"
+    out_faithfulness, out_agreement, out_randomization = output_files(art, args.tag)
 
     rows, agreement_rows = [], []
     # Independent of the case loop below, which --only-randomization skips.
@@ -253,10 +294,10 @@ def main() -> None:
             })
 
         if case_index == 0:
-            deletion_insertion_curves(results, figures / f"deletion_insertion_{dataset}_{pid}.png",
+            deletion_insertion_curves(results, figures / f"deletion_insertion_{dataset}_{pid}{suffix}.png",
                                       title=f"{dataset} / {pid} / target={label_names[target]}",
                                       target_is_probability=(target < n_bin))
-            agreement_heatmap(matrix, figures / f"agreement_spearman_{dataset}_{pid}.png",
+            agreement_heatmap(matrix, figures / f"agreement_spearman_{dataset}_{pid}{suffix}.png",
                               "spearman", f"Inter-method agreement — {pid}")
 
         # Every case, not every fifth. At `% 5` a 4-case run printed nothing at
@@ -269,14 +310,14 @@ def main() -> None:
 
     faithfulness = pd.DataFrame(rows)
     if args.only_randomization:
-        existing = art / "results_faithfulness.csv"
+        existing = out_faithfulness
         if not existing.is_file():
             raise SystemExit(f"--only-randomization needs {existing} from a full run")
         faithfulness = pd.read_csv(existing)
         log.info("reusing %d deletion/insertion rows from %s", len(faithfulness), existing)
     else:
-        faithfulness.to_csv(art / "results_faithfulness.csv", index=False)
-        pd.DataFrame(agreement_rows).to_csv(art / "results_agreement.csv", index=False)
+        faithfulness.to_csv(out_faithfulness, index=False)
+        pd.DataFrame(agreement_rows).to_csv(out_agreement, index=False)
 
     print("\n" + "=" * 86)
     print(f"FAITHFULNESS — {dataset}/{args.split}, n={len(ids)} cases")
@@ -336,9 +377,15 @@ def main() -> None:
                      time.perf_counter() - t0)
 
     rand_df = pd.DataFrame(rand_rows)
-    rand_df.to_csv(art / "results_randomization.csv", index=False)
+    if rand_rows:
+        rand_df.to_csv(out_randomization, index=False)
+    else:
+        # `--randomization-cases 0` is how a second run with another baseline
+        # skips a cascade that does not depend on the baseline. Writing the
+        # empty frame replaced the first run's thirty cases with a blank file.
+        log.info("no randomisation cases were run: %s is left as it is", out_randomization)
     if randomization:
-        randomization_plot(randomization, figures / "model_randomization.png")
+        randomization_plot(randomization, figures / f"model_randomization{suffix}.png")
 
     print("\n" + "=" * 86)
     print("MODEL-RANDOMISATION SANITY CHECK (Adebayo et al. 2018)")
@@ -374,12 +421,12 @@ def main() -> None:
             print(f"at_{last_stage} with a 95% interval clustered by patient "
                   "(lower = decorrelates = more faithful):")
             print(table.round(4).to_string())
-            overlapping = [
-                (a, b)
-                for i, a in enumerate(table.index) for b in list(table.index)[i + 1:]
-                if table.loc[a, "ci_hi"] >= table.loc[b, "ci_lo"]
-            ]
-            if overlapping:
+            overlapping = unordered_pairs(table)
+            if overlapping is None:
+                print()
+                print("   at least one method has no usable interval -- one patient, or nothing "
+                      "defined -- so no ordering is claimed")
+            elif overlapping:
                 print()
                 print("   intervals OVERLAP, so these pairs are not ordered by the data:")
                 for a, b in overlapping:
@@ -419,8 +466,10 @@ def main() -> None:
             print(f"all methods decorrelated (|rho| <= 0.5 at {last_stage!r}).")
 
 
-    print(f"\nwrote {art / 'results_faithfulness.csv'}, {art / 'results_agreement.csv'}, "
-          f"{art / 'results_randomization.csv'}")
+    written = [] if args.only_randomization else [out_faithfulness, out_agreement]
+    if rand_rows:
+        written.append(out_randomization)
+    print("\nwrote " + ", ".join(str(path) for path in written))
 
 
 if __name__ == "__main__":

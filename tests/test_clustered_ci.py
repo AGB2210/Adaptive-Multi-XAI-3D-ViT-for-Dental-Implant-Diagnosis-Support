@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.xai.runner import ci_table, clustered_ci, patients_of
+from src.xai.runner import ci_table, clustered_ci, has_an_interval, patients_of, unordered_pairs
 
 
 def sites(n_patients=20, per_patient=14, spread=1.0, within=0.05, seed=0):
@@ -165,3 +165,42 @@ class TestACaseIdIsNotAPatientId:
         _, lo_p, hi_p = clustered_ci(by_patient, "value")
         _, lo_r, hi_r = clustered_ci(by_row, "value")
         assert hi_p - lo_p > hi_r - lo_r, "resampling rows must understate the interval"
+
+
+class TestWhatATableCanBeAskedAbout:
+    """`has_an_interval` and `unordered_pairs`: the two questions the run
+    scripts put to a `ci_table`, and the case where neither can be put.
+
+    The scripts used to compare bounds directly. A method measured on ONE
+    patient has an interval of zero width, so it "did not overlap" any other
+    and the run printed that the ordering was supported -- on a resample that
+    resampled nothing.
+    """
+
+    @staticmethod
+    def table(n_patients, gap=1.0, noise=0.02):
+        rng = np.random.default_rng(4)
+        rows = [{"patient_id": f"P{p:02d}", "method": method, "value": gap * i + rng.normal(0.0, noise)}
+                for p in range(n_patients) for _ in range(3) for i, method in enumerate(("a", "b", "c"))]
+        return ci_table(pd.DataFrame(rows), "value")
+
+    def test_methods_far_apart_have_no_unordered_pairs(self):
+        table = self.table(8)
+        assert has_an_interval(table)
+        assert unordered_pairs(table) == []
+
+    def test_methods_on_top_of_each_other_are_all_unordered(self):
+        pairs = unordered_pairs(self.table(8, gap=0.0, noise=0.5))
+        assert sorted(tuple(sorted(pair)) for pair in pairs) == [("a", "b"), ("a", "c"), ("b", "c")]
+
+    def test_one_patient_is_none_and_not_an_empty_list(self):
+        table = self.table(1)
+        assert (table.ci_lo == table.ci_hi).all(), "clustered_ci's answer for one patient: zero width"
+        assert not has_an_interval(table)
+        assert unordered_pairs(table) is None, "None: the question cannot be put. [] would say 'all separated'"
+
+    def test_a_method_with_nothing_defined_is_none_too(self):
+        table = self.table(8)
+        table.loc["b", ["value", "ci_lo", "ci_hi"]] = np.nan
+        assert not has_an_interval(table)
+        assert unordered_pairs(table) is None

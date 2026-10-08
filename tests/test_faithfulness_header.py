@@ -124,3 +124,45 @@ class TestTheAdaptiveSummaryReadsItsRows:
         summary = source[source.index("# ---- report the three claims"):]
         assert "direction_note(" in summary
         assert "target <" not in summary, "the per-case `target` is unbound under --from-csv"
+
+
+class TestASecondRunReplacesNothing:
+    """`--tag`: one run writes three files, and they are named together.
+
+    The RUNBOOK asks for the default run and then for `--baseline mean`. The
+    second replaced the first run's agreement and randomisation files, and with
+    the default method list it dropped the rows of any method the first run had
+    been given by name.
+    """
+
+    script = staticmethod(_load)
+
+    def test_without_a_tag_the_names_are_the_ones_every_document_uses(self, tmp_path):
+        assert [p.name for p in self.script().output_files(tmp_path)] == [
+            "results_faithfulness.csv", "results_agreement.csv", "results_randomization.csv"]
+
+    def test_a_tag_goes_into_all_three_names(self, tmp_path):
+        script = self.script()
+        names = [p.name for p in script.output_files(tmp_path, "mean_deviation")]
+        assert names == ["results_faithfulness_mean_deviation.csv", "results_agreement_mean_deviation.csv",
+                         "results_randomization_mean_deviation.csv"]
+        assert not set(names) & {p.name for p in script.output_files(tmp_path)}
+
+    def test_every_name_is_still_one_the_pack_command_collects(self, tmp_path):
+        from src.inference.handback import RESULT_FILES
+
+        patterns = [pattern for pattern, _, _ in RESULT_FILES]
+        for path in self.script().output_files(tmp_path, "mean_response"):
+            assert any(path.match(pattern) for pattern in patterns), path.name
+
+    @pytest.mark.parametrize("tag", ["../elsewhere", "a b", "x.csv", "-leading", "a/b"])
+    def test_a_tag_that_could_not_be_part_of_a_file_name_is_refused(self, tmp_path, tag):
+        with pytest.raises(SystemExit):
+            self.script().output_files(tmp_path, tag)
+
+    def test_no_randomisation_cases_leaves_the_file_alone(self):
+        """`--randomization-cases 0` used to write the empty frame over the first run's file."""
+        source = (ROOT / "scripts" / "run_faithfulness.py").read_text(encoding="utf-8")
+        write = source.index("rand_df.to_csv(out_randomization")
+        guard = source.rindex("if rand_rows:", 0, write)
+        assert write - guard < 60, "the write must sit directly under the guard"

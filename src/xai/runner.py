@@ -485,6 +485,33 @@ def ci_table(frame, value_col: str, group_col: str = "method", **kw):
     return pd.DataFrame(rows).set_index(group_col).sort_values(value_col)
 
 
+def has_an_interval(table) -> bool:
+    """Whether every row of a `ci_table` carries an interval that says something.
+
+    Two ways it does not. Nothing finite gives NaN, and NaN compares False both
+    ways, so "the intervals do not overlap" and "the interval excludes chance"
+    both come out true for a row that has no interval at all. And ONE patient
+    gives an interval of zero width: every resample is that patient. That is
+    what `clustered_ci` should return for it, and it is not evidence that two
+    methods are separated -- nothing was resampled.
+    """
+    return bool(table[["ci_lo", "ci_hi"]].notna().all().all() and (table["patients"] >= 2).all())
+
+
+def unordered_pairs(table) -> list[tuple[str, str]] | None:
+    """Pairs of rows of a `ci_table` whose intervals overlap, or None if the question cannot be put.
+
+    None is not an empty list. An empty list says every pair is separated; None
+    says some row has no usable interval (`has_an_interval`), so no ordering is
+    claimed either way.
+    """
+    if not has_an_interval(table):
+        return None
+    names = list(table.index)
+    return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
+            if table.loc[a, "ci_hi"] >= table.loc[b, "ci_lo"]]
+
+
 def explanation_target(cfg, spec=None, outputs=None) -> int:
     """Which output column to explain.
 
