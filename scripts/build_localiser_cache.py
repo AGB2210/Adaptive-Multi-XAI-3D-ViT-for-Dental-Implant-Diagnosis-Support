@@ -19,7 +19,7 @@ calls on an uploaded scan, so the training input and the app's input are the
 same transform of the same volume. A scan whose orientation never resolved
 (10 of 532) has no sign and no site labels, and is skipped.
 
-At 1.2 mm a scan is ~1.3 MB, so the whole cohort is well under a gigabyte.
+At 1.2 mm a scan is 2.6 MB (128 x 128 x 80, float16), so the whole cohort is 1.3 GB.
 """
 
 from __future__ import annotations

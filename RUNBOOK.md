@@ -235,7 +235,7 @@ machine. **This run exists to bring files back**, in three groups:
 | | What | Why it is wanted |
 |---|---|---|
 | 1 | The five site checkpoints, each with its companion files | The inference app loads them (`README.md`, "The app"). It has never been run on a real checkpoint |
-| 2 | A trained site localiser, with its evaluation | The app's path for a scan with no mask. The localiser has never been trained on the cohort |
+| 2 | A trained site localiser, with its evaluation | The app's path for a scan with no mask. The localiser has never been trained to completion on the cohort: one epoch of fold 0 was run, to time it (4f) |
 | 3 | Every result file, as rows | The paper's tables are transcribed from a report. Twice a transcribed figure has failed when recomputed |
 
 Section 6 packs all three with one command, after checking that the app will
@@ -243,12 +243,15 @@ accept every checkpoint. **Read section 6 before you start**, not when you
 finish: it is what decides whether the run was worth its cost.
 
 **Every command in this section has been run end to end, in this order, at this
-version** -- on the fourteen scans a laptop holds, one epoch per fold, twenty
-minutes in all. The archive it produced was verified on the receiving side and
-loaded into the app, which analysed a real scan with its mask and without. So
-the sequence is known to run and the files are known to fit; what a laptop
-cannot tell you is how long each step takes at full size, and where this page
-gives a duration it says where the figure came from.
+version** -- on the fourteen scans a laptop holds, one epoch per fold, with each
+command's own exit code recorded: 31 commands for starting point B, all exit 0,
+27 minutes. Starting point A was rehearsed too, on a folder written by the
+v3.4.0 code itself: 33 commands, every exit code the expected one. Each archive
+was verified on the receiving side; one was loaded into the app, which analysed
+a real scan with its mask and without and explained a site at the configured
+settings. So the sequence is known to run and the files are known to fit; what
+a laptop cannot tell you is how long each step takes at full size, and where
+this page gives a duration it says where the figure came from.
 
 ### Which of two starting points you are at
 
@@ -297,15 +300,21 @@ run's, which is the reason section 6 asks for all of it and not a subset.
 
 ### If the budget runs short, in this order
 
-1. **Fold 0, complete.** `cv_fold0/best.pt`, then `run_adaptive.py` on it (its
-   `calibration.json`), then the fold-0 localiser and its evaluation (4f, with
-   `0` in place of the loop). That is the smallest set the app is whole with:
-   one site model and one localiser that have both never seen fold 0's test
-   patients.
-2. **The rows.** The other four folds, `pool_cv.py`, and 4d.
-3. **Calibration for folds 1-4**, minutes each (4d), and **localisers for folds
-   1-4**. The first localiser fold tells you what the rest will cost; it has
-   never been timed on real hardware.
+1. **Fold 0's site model, complete.** `cv_fold0/best.pt`, then
+   `run_adaptive.py` on it (its `calibration.json`). With these the app works
+   on any scan that has a segmentation.
+2. **The rows.** The other four folds, `pool_cv.py`, 4d and 4e.
+3. **Calibration for folds 1-4**, minutes each (4d).
+4. **The fold-0 localiser and its evaluation** (4f, with `0` in place of the
+   loop), then localisers for folds 1-4. With a fold-0 localiser the app is
+   whole: one site model and one localiser that have both never seen fold 0's
+   test patients.
+
+**The localiser is last because it is the one model in this run that can be
+trained without the rented machine.** It reads a cache that builds from the raw
+scans in about ten minutes, and its network fits a 4 GB laptop GPU at about
+fourteen hours a fold (4f has the measurement). The site checkpoints and the
+rows cannot be made anywhere else.
 
 A partial run is worth sending. Section 6's command states what is missing and
 what each absence costs, so nobody has to work it out from a file list.
@@ -458,8 +467,8 @@ It writes `artifacts_sites/cv_pooled_metrics.json` and `cv_predictions.csv`.
 Besides the pooled AUROC, the json holds the pooled millimetre errors with a
 patient-clustered interval on each MAE, and **feasibility agreement at the
 configured rule** -- over every site, and over the sites that need an implant --
-with its interval and the share of sites called feasible that measure
-infeasible. That last table is the project's headline result; before v3.8.0 it
+with its interval and the share of all those sites that are called feasible
+and measure infeasible. That last table is the project's headline result; before v3.8.0 it
 was printed per fold and saved nowhere, so bring this file back.
 
 `--model cnn3d` trains the CNN baseline through the same loop. **It is not on
@@ -530,14 +539,23 @@ it is slower.
 **Run them in that order.** `run_adaptive.py` reads `xai_runtime.csv`, which
 `run_xai.py` writes; without it the Pareto table is skipped.
 
-**Every one of these overwrites its own output.** `results_faithfulness.csv` is
-one file whichever flags produced it, so a second faithfulness run replaces the
-first. Rename a file as soon as its run finishes if another run of the same
-script is coming -- section 6 packs anything named `results_<kind>*.csv`:
+**Every one of these overwrites its own output**, and `run_faithfulness.py`
+writes three files in one run: `results_faithfulness.csv`,
+`results_agreement.csv` and `results_randomization.csv`. A second faithfulness
+run with other settings would replace all three -- and would repeat the
+randomisation cascade, the slowest part, which does not depend on the baseline
+or the score. So a second run is given a name and told to skip the cascade:
 
 ```bash
-mv artifacts_sites/results_faithfulness.csv artifacts_sites/results_faithfulness_default.csv
+python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --baseline mean --score deviation --tag mean_deviation --randomization-cases 0
 ```
+
+That writes `results_faithfulness_mean_deviation.csv` and
+`results_agreement_mean_deviation.csv` and touches nothing the first run wrote.
+Do not rename the untagged files afterwards: `--only-randomization` reads
+`results_faithfulness.csv` by that name. The other four scripts have no `--tag`;
+if you run one of them twice, rename its output first. Section 6 packs anything
+named `results_<kind>*.csv`.
 
 **Then calibrate the other four folds, which takes minutes.** The app shows a
 calibrated probability and routes on a fitted gate only for a checkpoint with a
@@ -587,18 +605,29 @@ flat response looks like. Two suspects, and both are now flags rather than
 constants:
 
 ```bash
-python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --baseline mean --score deviation
+python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --baseline mean --score deviation --tag mean_deviation --randomization-cases 0
+```
+
+```bash
+python scripts/run_faithfulness.py --config configs/sites.yaml --checkpoint artifacts_sites/runs/cv_fold0/best.pt --baseline mean --tag mean_response --randomization-cases 0
 ```
 
 `--baseline mean` destroys geometry, where the default blur (sigma 4 voxels =
 1.2 mm) removes texture and leaves a crest-to-canal distance perfectly readable.
 `--score deviation` integrates distance from the full-input prediction instead
 of the raw output, because a millimetre head is not a confidence and has no
-reason to fall when evidence is removed. Both settings are written into every
-row of `results_faithfulness.csv`, so two runs can never be confused.
+reason to fall when evidence is removed. The second line changes the baseline
+alone, which is the case the August column most likely was (see "one question
+that was not" above). Both settings are written into every row, and `--tag`
+puts each run in files of its own (4d), so the default run from 4d is still
+there beside them and the three can never be confused.
 
-Run the default settings too, and report both. If the spread stays at 0.013 with
-a mean baseline, the null result is real and belongs in the paper.
+With `--randomization-cases 0` both skip the hour-long cascade, which the 4d
+run has already done and which does not depend on either setting. What is left
+is the deletion and insertion sweep: 200 cases each, on the GPU if it is free.
+
+Report all three. If the spread stays at 0.013 with a mean baseline, the null
+result is real and belongs in the paper.
 
 ### 4f. The site localiser — for the app's image-only path
 
@@ -610,18 +639,24 @@ trained on the **same folds**:
 python scripts/build_localiser_cache.py --config configs/localiser.yaml
 ```
 
-Reads the site cache from 4b, so it takes minutes; under a gigabyte for the
-whole cohort at 1.2 mm.
+Reads the site cache from 4b, so it takes minutes; 1.3 GB for the whole
+cohort at 1.2 mm. Without the site cache it reads the raw scans instead:
+measured at 628 s for all 522 on a laptop, none failed.
 
 ```bash
 python scripts/train_localiser.py --config configs/localiser.yaml --fold 0
 ```
 
-**Time that one before starting the rest.** The localiser has only ever been
-trained for three epochs on fourteen scans, so what a fold costs on real
-hardware is not known: up to 80 epochs over about 290 volumes of 128 x 128 x 80,
-stopping early after 15 without improvement. It logs one line per epoch with
-its seconds; multiply the first few by 80 for the ceiling. `--num-workers` is
+**Time that one before starting the rest.** What a fold costs on a rented GPU
+is not known. What is measured: **one epoch of fold 0 on the whole cohort took
+645 s on an RTX 3050 laptop GPU with 4 GB**, memory nearly full -- 293 training
+and 96 validation patients, volumes of 128 x 128 x 80, batch 4. That puts the
+80-epoch ceiling near fourteen hours on that laptop; a 24 GB card should be
+several times faster, and training stops early after 15 epochs without
+improvement. After that single epoch the validation median position error was
+6.3 mm (p90 12.6 mm, orientation 74.5% correct): it learns, and one epoch is
+nowhere near a usable localiser. The script logs one line per epoch with its
+seconds; multiply the first few by 80 for your ceiling. `--num-workers` is
 not a flag here -- if the box's `/dev/shm` is small (see 4b), set
 `localiser.num_workers: 0` in `configs/localiser.yaml` first.
 
@@ -742,7 +777,8 @@ cannot recover it from the table. And **do not reimplement this bootstrap.** Cal
 `clustered_ci`. Writing a fresh loop is how one pass over these documents came to
 "correct" a table that had been right all along: the loop used a mean, the
 published values were medians, and the disagreement looked like evidence the
-numbers had never come from the CSV.
+numbers had never come from the CSV. `scripts/summarise_results.py` makes that
+call for every table from the files in `artifacts_sites/` (section 6).
 
 ---
 
@@ -779,8 +815,10 @@ for what a browser did to three transfers. A few hundred megabytes: five
 checkpoints at about 70 MB each are most of it.
 
 Nothing is packed while a `PROBLEM` stands. Read the line: it names the file
-and the reason. `--allow-problems` packs anyway and records them, for when the
-choice is a flawed archive or none. `--check-only` reports and writes nothing,
+and the reason. `--allow-problems` packs anyway, records each problem in the
+archive, and includes the refused checkpoint itself -- for when the choice is a
+flawed archive or none, and so that a file the app would not load can still be
+examined after the rental has ended. `--check-only` reports and writes nothing,
 and is worth running after 4c, before the long steps, as well as at the end.
 
 ### What the app reads from each file
@@ -824,7 +862,7 @@ artifacts_sites/runs/cv_fold*/metrics.json, history.csv  4c
 artifacts_sites/cv_pooled_metrics.json                   4c   pool_cv.py -- must hold a "feasibility" block
 artifacts_sites/cv_predictions.csv                       4c
 artifacts_sites/xai_*.csv                                4d   run_xai.py
-artifacts_sites/results_faithfulness*.csv                4d   one per run; see the renaming note in 4d
+artifacts_sites/results_faithfulness*.csv                4d   one per run: the default, and each --tag (4d, 4e)
 artifacts_sites/results_randomization*.csv               4d
 artifacts_sites/results_agreement*.csv                   4d
 artifacts_sites/results_localization*.csv                4d
@@ -849,10 +887,30 @@ the dataset by 4b and 4f.
 python scripts/pack_handback.py --verify path/to/capstone_handback_v<version>.tar.gz
 ```
 
-It unpacks beside the archive, recomputes every checksum, loads every
-checkpoint again **with that machine's own PyTorch** -- the two machines will
-not have the same build, and this is the test of whether that matters -- and
-prints which files to pick in the app's **Models** dialog for each fold.
+Keep the `.sha256` file beside the archive: it is compared first, so an archive
+cut short in transfer is reported in one line. Then it unpacks beside the
+archive, recomputes every checksum, loads every checkpoint again **with that
+machine's own PyTorch** -- the two machines will not have the same build, and
+this is the test of whether that matters -- and prints which files to pick in
+the app's **Models** dialog for each fold. Running it again replaces the folder
+it unpacked the first time.
+
+Then the tables, from the rows that came back:
+
+```bash
+python scripts/summarise_results.py --artifacts path/to/capstone_handback_v<version>/artifacts_sites
+```
+
+`--verify` prints that line with the path filled in. It needs no checkpoint, no
+scan and no GPU and takes seconds. It writes `RESULTS_SUMMARY.md` and
+`results_summary.json` into that folder: the pooled cross-validation figures
+with the feasibility block, calibration per fold, and every explainability
+table with the patient-clustered interval the run scripts print -- from the same
+function, at the same statistic, which is the median. A file that did not come
+back is listed with the step that writes it. **Quote from that file, not from a
+terminal log or a message**: twice a figure copied by hand failed when it was
+recomputed from its rows (`REPORT.md` C8j, C8m). It runs equally on the machine
+that did the run, with no arguments, and is worth reading there before packing.
 
 The app itself is one click: `start.bat` on Windows, `python -m app --open`
 anywhere. `README.md`, "The app", has the rest.

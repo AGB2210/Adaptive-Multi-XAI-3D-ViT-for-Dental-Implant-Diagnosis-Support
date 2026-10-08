@@ -38,7 +38,8 @@ threshold is a re-score of a CSV, not a reprocess of 28 GB.
 | XAI stack on the site task | **Done.** Randomisation and faithfulness stand. **Localisation was re-run after the mask fix** (v3.4.0; the earlier figures, scored on masks cut 7.2 mm from the box the model was shown, stay withdrawn): enrichment against the canal is Grad-CAM 1.92, attention rollout 1.60, Integrated Gradients 1.45 and GradientSHAP 0.69, where 1.0 is chance. The pointing rate is 0.000 for every method and Grad-CAM's interval overlaps rollout's, so no best localiser is named |
 | Training on the site task | **All five folds done and pooled** on a rented RTX 4090. Pooled AUROC 0.9535, patient-clustered 95% CI [0.9424, 0.9636], over 6,781 sites from 486 patients, each scored once by the model that never saw it |
 | Inference app | **Built and tested** — FastAPI server and browser page, started by `start.bat`. With a mask it is the measured pipeline; the image-only path waits on a trained localiser (see "Known limitation"). **It has not yet been run on a real checkpoint**: none has left the machine that trained it |
-| Hand-back from a GPU run | **Rehearsed end to end.** Every command of RUNBOOK 4 was run on 14 scans, the result packed by `pack_handback.py`, verified, and loaded into the app, which analysed a real scan with and without its mask. Those are one-epoch models; the rehearsal proves the files fit, and says nothing about a result |
+| Hand-back from a GPU run | **Rehearsed end to end, from both starting points, with every exit code recorded.** RUNBOOK 4 and 6 on 14 scans: 31 commands, all exit 0, the archive packed by `pack_handback.py`, verified, its tables recomputed by `summarise_results.py`, and its fold-0 files loaded into the app, which analysed a real scan with and without its mask and explained a site at the configured settings (61 s, 1.9 GB of a 4 GB GPU). Then the same from a folder written by the v3.4.0 code: its five checkpoints load, and predict within 0.004 mm of ones trained by the current code. Those are one-epoch models; the rehearsals prove the files fit, and say nothing about a result |
+| Site localiser | **Written and timed, not trained.** One epoch of fold 0 on the whole cohort: 645 s on a 4 GB laptop GPU, validation median position error 6.3 mm after it. No trained localiser exists yet, so the app's image-only path has no measured error |
 | Baselines | A CNN was measured on fold 0 and is ahead there; architecture selection is outside this project's scope, so it is recorded and not pursued. The geometric estimator was run on fold 0's test sites: height MAE 6.60 mm against its own floor of 7.05, width 6.68 mm against a floor of 3.63 — worse than predicting the median — and it declines to answer on 81.4% of sites |
 | Result files | The five-fold and v3.4.0 figures in this table are quoted from the report of the 30–31 August run (`REPORT.md` §C8i, §C8m). That run's result files were never transferred off the rented machine; only fold 0's rows are held, on the `fold0-results` branch |
 | Guide sign-off on clinical thresholds | **Pending** |
@@ -121,7 +122,16 @@ python scripts/pack_handback.py --verify path/to/capstone_handback_v<version>.ta
 ```
 
 checks every file against its checksum, loads each checkpoint with this
-machine's PyTorch, and prints which files to pick below for each fold.
+machine's PyTorch, and prints which files to pick below for each fold. It also
+prints the line that recomputes every table from the rows that came back:
+
+```bash
+python scripts/summarise_results.py --artifacts path/to/capstone_handback_v<version>/artifacts_sites
+```
+
+which writes `RESULTS_SUMMARY.md` beside them -- the pooled figures, calibration
+per fold, and each explainability table with its patient-clustered interval,
+from the same function the run scripts print with. No checkpoint or GPU needed.
 
 1. **Models** — pick a site model's `.pt` in the browser, with any of its
    companions: `calibration.json` (temperature and the fitted confidence gate,
@@ -365,7 +375,8 @@ src/train/     training loop, metrics with bootstrap CIs, localiser metrics
 src/xai/       rollout, IG, GradientSHAP, Grad-CAM, LIME (ablation only),
                faithfulness, localisation, calibration, adaptive fusion
 src/inference/ the app's path: checkpoint loading, scan preparation, sites,
-               prediction and verdicts, explanation
+               prediction and verdicts, explanation; and the two ends of a
+               hand-back: handback (check and pack), results_summary (tables)
 app/           FastAPI server and the browser page (python -m app)
 start.bat      one click on Windows: environment, server, browser
 scripts/       build_implant_labels, build_site_cache, train, evaluate,
@@ -373,6 +384,7 @@ scripts/       build_implant_labels, build_site_cache, train, evaluate,
                run_geometric_baseline, pool_cv, make_figures,
                compare_gradcam_tokens (needs no dataset),
                pack_handback (check a run against the app, pack it, verify it),
+               summarise_results (every table, recomputed from a run's files),
                build_localiser_cache, train_localiser, eval_localiser
 ```
 
